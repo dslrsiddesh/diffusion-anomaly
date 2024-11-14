@@ -13,21 +13,21 @@ import blobfile as bf
 import torch as th
 os.environ['OMP_NUM_THREADS'] = '8'
 
-import torch.distributed as dist
+# import torch.distributed as dist
 import torch.nn.functional as F
-from torch.nn.parallel.distributed import DistributedDataParallel as DDP
+# from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 from torch.optim import AdamW
-from visdom import Visdom
+# from visdom import Visdom
 import numpy as np
-viz = Visdom(port=8850)
-loss_window = viz.line( Y=th.zeros((1)).cpu(), X=th.zeros((1)).cpu(), opts=dict(xlabel='epoch', ylabel='Loss', title='classification loss'))
-val_window = viz.line( Y=th.zeros((1)).cpu(), X=th.zeros((1)).cpu(), opts=dict(xlabel='epoch', ylabel='Loss', title='validation loss'))
-acc_window= viz.line( Y=th.zeros((1)).cpu(), X=th.zeros((1)).cpu(), opts=dict(xlabel='epoch', ylabel='acc', title='accuracy'))
+# viz = Visdom(port=8850)
+# loss_window = viz.line( Y=th.zeros((1)).cpu(), X=th.zeros((1)).cpu(), opts=dict(xlabel='epoch', ylabel='Loss', title='classification loss'))
+# val_window = viz.line( Y=th.zeros((1)).cpu(), X=th.zeros((1)).cpu(), opts=dict(xlabel='epoch', ylabel='Loss', title='validation loss'))
+# acc_window= viz.line( Y=th.zeros((1)).cpu(), X=th.zeros((1)).cpu(), opts=dict(xlabel='epoch', ylabel='acc', title='accuracy'))
 
 from guided_diffusion import dist_util, logger
 from guided_diffusion.fp16_util import MixedPrecisionTrainer
 from guided_diffusion.image_datasets import load_data
-from guided_diffusion.train_util import visualize
+# from guided_diffusion.train_util import visualize
 from guided_diffusion.resample import create_named_schedule_sampler
 from guided_diffusion.script_util import (
     add_dict_to_argparser,
@@ -58,15 +58,14 @@ def main():
     resume_step = 0
     if args.resume_checkpoint:
         resume_step = parse_resume_step_from_filename(args.resume_checkpoint)
-        if dist.get_rank() == 0:
-            logger.log(
-                f"loading model from checkpoint: {args.resume_checkpoint}... at {resume_step} step"
+        logger.log(
+            f"loading model from checkpoint: {args.resume_checkpoint}... at {resume_step} step"
+        )
+        model.load_state_dict(
+            dist_util.load_state_dict(
+                args.resume_checkpoint, map_location=dist_util.dev()
             )
-            model.load_state_dict(
-                dist_util.load_state_dict(
-                    args.resume_checkpoint, map_location=dist_util.dev()
-                )
-            )
+        )
 
     # Needed for creating correct EMAs and fp16 parameters.
     dist_util.sync_params(model.parameters())
@@ -151,9 +150,10 @@ def main():
 
             loss = loss.mean()
             if prefix=="train":
-                viz.line(X=th.ones((1, 1)).cpu() * step, Y=th.Tensor([loss]).unsqueeze(0).cpu(),
-                     win=loss_window, name='loss_cls',
-                     update='append')
+                # viz.line(X=th.ones((1, 1)).cpu() * step, Y=th.Tensor([loss]).unsqueeze(0).cpu(),
+                #      win=loss_window, name='loss_cls',
+                #      update='append')
+                pass
 
             else:
 
@@ -164,9 +164,9 @@ def main():
                 output_max.backward()
                 saliency, _ = th.max(sub_batch.grad.data.abs(), dim=1)
                 print('saliency', saliency.shape)
-                viz.heatmap(visualize(saliency[0, ...]))
-                viz.image(visualize(sub_batch[0, 0,...]))
-                viz.image(visualize(sub_batch[0, 1, ...]))
+                # viz.heatmap(visualize(saliency[0, ...]))
+                # viz.image(visualize(sub_batch[0, 0,...]))
+                # viz.image(visualize(sub_batch[0, 1, ...]))
                 th.cuda.empty_cache()
 
 
@@ -177,42 +177,46 @@ def main():
 
         return losses
 
-    correct=0; total=0
-    for step in range(args.iterations - resume_step):
-        logger.logkv("step", step + resume_step)
-        logger.logkv(
-            "samples",
-            (step + resume_step + 1) * args.batch_size * dist.get_world_size(),
-        )
-        if args.anneal_lr:
-            set_annealed_lr(opt, args.lr, (step + resume_step) / args.iterations)
-        print('step', step + resume_step)
-        try:
-            losses = forward_backward_log(data, step + resume_step)
-        except:
-            data = iter(datal)
-            losses = forward_backward_log(data, step + resume_step)
+    try:
+        correct=0; total=0
+        for step in range(args.iterations - resume_step):
+            logger.logkv("step", step + resume_step)
+            logger.logkv(
+                "samples",
+                (step + resume_step + 1) * args.batch_size,
+            )
+            if args.anneal_lr:
+                set_annealed_lr(opt, args.lr, (step + resume_step) / args.iterations)
+            print('step', step + resume_step)
+            try:
+                losses = forward_backward_log(data, step + resume_step)
+            except:
+                data = iter(datal)
+                losses = forward_backward_log(data, step + resume_step)
 
-        correct+=losses["train_acc@1"].sum()
-        total+=args.batch_size
-        acctrain=correct/total
+            correct+=losses["train_acc@1"].sum()
+            total+=args.batch_size
+            acctrain=correct/total
 
-        mp_trainer.optimize(opt)
-          
-        if not step % args.log_interval:
-            logger.dumpkvs()
-        if (
-            step
-            and dist.get_rank() == 0
-            and not (step + resume_step) % args.save_interval
-        ):
-            logger.log("saving model...")
-            save_model(mp_trainer, opt, step + resume_step)
+            mp_trainer.optimize(opt)
+              
+            if not step % args.log_interval:
+                logger.dumpkvs()
+            if (
+                step
+                and not (step + resume_step) % args.save_interval
+            ):
+                logger.log("saving model...")
+                save_model(mp_trainer, opt, step + resume_step)
 
-    if dist.get_rank() == 0:
-        logger.log("saving model...")
+        # Save final model
+        logger.log("saving final model...")
         save_model(mp_trainer, opt, step + resume_step)
-    dist.barrier()
+
+    except KeyboardInterrupt:
+        logger.log("Training interrupted. Saving model checkpoint...")
+        save_model(mp_trainer, opt, step + resume_step)
+        logger.log("Checkpoint saved. Exiting...")
 
 
 def set_annealed_lr(opt, base_lr, frac_done):
@@ -222,12 +226,12 @@ def set_annealed_lr(opt, base_lr, frac_done):
 
 
 def save_model(mp_trainer, opt, step):
-    if dist.get_rank() == 0:
-        th.save(
-            mp_trainer.master_params_to_state_dict(mp_trainer.master_params),
-            os.path.join(logger.get_dir(), f"modelbratsclass{step:06d}.pt"),
-        )
-        th.save(opt.state_dict(), os.path.join(logger.get_dir(), f"optbratsclass{step:06d}.pt"))
+    # if dist.get_rank() == 0:
+    th.save(
+        mp_trainer.master_params_to_state_dict(mp_trainer.master_params),
+        os.path.join(logger.get_dir(), f"modelbratsclass{step:06d}.pt"),
+    )
+    th.save(opt.state_dict(), os.path.join(logger.get_dir(), f"optbratsclass{step:06d}.pt"))
 
 def compute_top_k(logits, labels, k, reduction="mean"):
     _, top_ks = th.topk(logits, k, dim=-1)
