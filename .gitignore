@@ -1,0 +1,5 @@
+data/
+data/brats/
+results/
+*.pyc
+.DS_Store
