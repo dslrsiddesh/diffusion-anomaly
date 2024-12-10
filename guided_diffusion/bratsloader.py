@@ -35,6 +35,9 @@ class BRATSDataset(torch.utils.data.Dataset):
                 datapoint = dict()
                 # extract all files as channels
                 for f in files:
+                    print("Extracting: ", f)
+                    if(len(f.split('_'))<4):
+                        continue
                     seqtype = f.split('_')[3]
                     datapoint[seqtype] = os.path.join(root, f)
                 assert set(datapoint.keys()) == self.seqtypes_set, \

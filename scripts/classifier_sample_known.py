@@ -5,16 +5,17 @@ numpy array. This can be used to produce samples for FID evaluation.
 import matplotlib.pyplot as plt
 import argparse
 import os
-from visdom import Visdom
-viz = Visdom(port=8850)
+# from visdom import Visdom
+# viz = Visdom(port=8850)
 import sys
+import nibabel as nib
 sys.path.append("..")
 sys.path.append(".")
 from guided_diffusion.bratsloader import BRATSDataset
 import torch.nn.functional as F
 import numpy as np
 import torch as th
-import torch.distributed as dist
+# import torch.distributed as dist
 from guided_diffusion.image_datasets import load_data
 from guided_diffusion import dist_util, logger
 from guided_diffusion.script_util import (
@@ -34,6 +35,8 @@ def visualize(img):
 
 def main():
     args = create_argparser().parse_args()
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
 
     dist_util.setup_dist()
     logger.configure()
@@ -105,7 +108,6 @@ def main():
     all_labels = []
 
     for img in datal:
-
         model_kwargs = {}
      #   img = next(data)  # should return an image from the dataloader "data"
         print('img', img[0].shape, img[1])
@@ -115,13 +117,13 @@ def main():
           if img[2]==0:
               continue    #take only diseased images as input
               
-          viz.image(visualize(img[0][0, 0, ...]), opts=dict(caption="img input 0"))
-          viz.image(visualize(img[0][0, 1, ...]), opts=dict(caption="img input 1"))
-          viz.image(visualize(img[0][0, 2, ...]), opts=dict(caption="img input 2"))
-          viz.image(visualize(img[0][0, 3, ...]), opts=dict(caption="img input 3"))
-          viz.image(visualize(img[3][0, ...]), opts=dict(caption="ground truth"))
+        #   viz.image(visualize(img[0][0, 0, ...]), opts=dict(caption="img input 0"))
+        #   viz.image(visualize(img[0][0, 1, ...]), opts=dict(caption="img input 1"))
+        #   viz.image(visualize(img[0][0, 2, ...]), opts=dict(caption="img input 2"))
+        #   viz.image(visualize(img[0][0, 3, ...]), opts=dict(caption="img input 3"))
+        #   viz.image(visualize(img[3][0, ...]), opts=dict(caption="ground truth"))
         else:
-          viz.image(visualize(img[0][0, ...]), opts=dict(caption="img input"))
+        #   viz.image(visualize(img[0][0, ...]), opts=dict(caption="img input"))
           print('img1', img[1])
           number=img[1]["path"]
           print('number', number)
@@ -156,30 +158,68 @@ def main():
         print('time for 1000', start.elapsed_time(end))
 
         if args.dataset=='brats':
-          viz.image(visualize(sample[0,0, ...]), opts=dict(caption="sampled output0"))
-          viz.image(visualize(sample[0,1, ...]), opts=dict(caption="sampled output1"))
-          viz.image(visualize(sample[0,2, ...]), opts=dict(caption="sampled output2"))
-          viz.image(visualize(sample[0,3, ...]), opts=dict(caption="sampled output3"))
-          difftot=abs(org[0, :4,...]-sample[0, ...]).sum(dim=0)
-          viz.heatmap(visualize(difftot), opts=dict(caption="difftot"))
+        #   viz.image(visualize(sample[0,0, ...]), opts=dict(caption="sampled output0"))
+        #   viz.image(visualize(sample[0,1, ...]), opts=dict(caption="sampled output1"))
+        #   viz.image(visualize(sample[0,2, ...]), opts=dict(caption="sampled output2"))
+        #   viz.image(visualize(sample[0,3, ...]), opts=dict(caption="sampled output3"))
+            difftot=abs(org[0, :4,...]-sample[0, ...]).sum(dim=0)
+        #   viz.heatmap(visualize(difftot), opts=dict(caption="difftot"))
+
+        # Get the original filename from number
+            original_path = str(number)
+            filename = os.path.basename(original_path)
+            base_name = os.path.splitext(filename)[0]
+            
+            # Check if original file is .nii.gz or .nii
+            is_gz = original_path.endswith('.nii.gz')
+            
+            # Convert sample to numpy and reshape if needed
+            sample_np = sample.cpu().numpy()
+            
+            # Create nifti image with same affine and header as input if available
+            try:
+                original_nifti = nib.load(original_path)
+                affine = original_nifti.affine
+                header = original_nifti.header
+            except:
+                # If original can't be loaded, use identity affine
+                affine = np.eye(4)
+                header = None
+            
+            # Create new nifti image
+            nifti_img = nib.Nifti1Image(sample_np[0], affine, header)
+            
+            # Save with same extension as input
+            if is_gz:
+                output_path = os.path.join(args.output_dir, f"{base_name}_sampled.nii.gz")
+            else:
+                output_path = os.path.join(args.output_dir, f"{base_name}_sampled.nii")
+            
+            nib.save(nifti_img, output_path)
+            logger.log(f"Saved sample to {output_path}")
           
         elif args.dataset=='chexpert':
-          viz.image(visualize(sample[0, ...]), opts=dict(caption="sampled output"+str(name)))
+        #   viz.image(visualize(sample[0, ...]), opts=dict(caption="sampled output"+str(name)))
           diff=abs(visualize(org[0, 0,...])-visualize(sample[0,0, ...]))
           diff=np.array(diff.cpu())
-          viz.heatmap(np.flipud(diff), opts=dict(caption="diff"))
+        #   viz.heatmap(np.flipud(diff), opts=dict(caption="diff"))
 
 
-        gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
-        all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
-        if args.class_cond:
-            gathered_labels = [
-                th.zeros_like(classes) for _ in range(dist.get_world_size())
-            ]
-            dist.all_gather(gathered_labels, classes)
-            all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
+        # gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
+        # dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
+        # all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
+        # if args.class_cond:
+        #     gathered_labels = [
+        #         th.zeros_like(classes) for _ in range(dist.get_world_size())
+        #     ]
+        #     dist.all_gather(gathered_labels, classes)
+        #     all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
         
+
+        # Simply append samples without gathering
+        all_images.append(sample.cpu().numpy())
+        if args.class_cond:
+            all_labels.append(classes.cpu().numpy())
 
     arr = np.concatenate(all_images, axis=0)
     arr = arr[: args.num_samples]
@@ -188,12 +228,13 @@ def main():
         label_arr = label_arr[: args.num_samples]
     
 
-    dist.barrier()
+    # dist.barrier()
     logger.log("sampling complete")
 
 
 def create_argparser():
     defaults = dict(
+        output_dir="sampled",
         data_dir="",
         clip_denoised=True,
         num_samples=10,
