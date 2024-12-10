@@ -1,4 +1,5 @@
 data/
+now_data/
 data/brats/
 results/
 *.pyc
