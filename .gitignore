@@ -3,3 +3,6 @@ data/brats/
 results/
 *.pyc
 .DS_Store
+
+# exclude sampled outputs
+sampled/

@@ -48,14 +48,15 @@ class BRATSDataset(torch.utils.data.Dataset):
         out = []
         filedict = self.database[x]
         for seqtype in self.seqtypes:
-            number=filedict['t1'].split('/')[4]
+            print(filedict['t1'])
+            number=filedict['t1'].split('/')[2]
             nib_img = nibabel.load(filedict[seqtype])
             out.append(torch.tensor(nib_img.get_fdata()))
         out = torch.stack(out)
         out_dict = {}
         if self.test_flag:
-            path2 = './data/brats/test_labels/' + str(
-                number) + '-label.nii.gz'
+            path2 = './brats-data/test_labels/' + str(
+                number) + '-label.nii'
 
 
             seg=nibabel.load(path2)
