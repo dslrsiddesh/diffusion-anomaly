@@ -253,6 +253,84 @@ class ResBlock(TimestepBlock):
             h = h + emb_out
             h = self.out_layers(h)
         return self.skip_connection(x) + h
+    
+class CrossAttentionLayer(nn.Module):
+    """
+    Cross-attention where Query comes from the U-Net feature map `x`
+    and Key/Value come from the AE encoder feature map `enc`.
+    """
+    def __init__(
+        self,
+        channels,                  # number of channels in both x & enc
+        num_heads=1,
+        num_head_channels=-1,
+        use_checkpoint=False,
+        use_new_attention_order=False,
+    ):
+        super().__init__()
+        self.channels = channels
+        self.use_checkpoint = use_checkpoint
+        self.dims = 2  # 2D convolutions
+
+        # Determine number of heads exactly like AttentionBlock
+        if num_head_channels == -1:
+            self.num_heads = num_heads
+        else:
+            assert channels % num_head_channels == 0, (
+                f"channels {channels} not divisible by head size {num_head_channels}"
+            )
+            self.num_heads = channels // num_head_channels
+
+        # Separate normalizations for query and key/value
+        self.norm_q = normalization(channels)
+        self.norm_k = normalization(channels)
+
+        # 1×1 convs projecting into Q and into K/V
+        self.to_q  = conv_nd(self.dims, channels, channels,     1, padding=0)
+        self.to_kv = conv_nd(self.dims, channels, channels * 2, 1, padding=0)
+
+        # Choose attention implementation
+        if use_new_attention_order:
+            self.attention = QKVAttention(self.num_heads)
+        else:
+            self.attention = QKVAttentionLegacy(self.num_heads)
+
+        # Zero-initialized 1×1 conv for residual projection
+        self.proj_out = zero_module(conv_nd(self.dims, channels, channels, 1, padding=0))
+
+    def forward(self, x, enc):
+        """
+        x:   [B, C, H, W] — U-Net feature map (query)
+        enc: [B, C, H, W] — AE encoder feature map (key & value)
+        returns: [B, C, H, W]
+        """
+        if self.use_checkpoint:
+            return checkpoint(self._forward, (x, enc), self.parameters(), True)
+        else:
+            return self._forward(x, enc)
+
+    def _forward(self, x, enc):
+        B, C, H, W = x.shape
+        S = H * W
+
+        # 1) Compute Q from x
+        q = self.to_q(self.norm_q(x))       # [B, C, H, W]
+        q = q.view(B, C, S)                 # [B, C, S]
+
+        # 2) Compute K,V from enc
+        kv = self.to_kv(self.norm_k(enc))   # [B, 2C, H, W]
+        kv = kv.view(B, 2*C, S)             # [B, 2C, S]
+        k, v = kv.chunk(2, dim=1)           # each [B, C, S]
+
+        # 3) Pack QKV for legacy attention, or use QKVAttention if you prefer
+        qkv = th.cat([q, k, v], dim=1)   # [B, 3C, S]
+        h = self.attention(qkv)             # [B, C, S]
+
+        # 4) Reshape back to spatial
+        h = h.view(B, C, H, W)              # [B, C, H, W]
+
+        # 5) Final 1×1 conv + residual
+        return self.proj_out(h) + x
 
 
 class AttentionBlock(nn.Module):
@@ -447,6 +525,8 @@ class UNetModel(nn.Module):
     ):
         super().__init__()
 
+        print("---------------------------Instantiated UNetModel in unet.py---------------------------")
+
         if num_heads_upsample == -1:
             num_heads_upsample = num_heads
 
@@ -472,6 +552,21 @@ class UNetModel(nn.Module):
             nn.SiLU(),
             linear(time_embed_dim, time_embed_dim),
         )
+
+        # We know channel_mult=(1,1,2,2,4,4) for 256×256 → resolutions [256,128,64,32,16,8]
+        self.cross_attn = nn.ModuleDict()
+        resolutions = [image_size // (2**i) for i in range(len(channel_mult))]  # [256,128,…,8]
+        print("====== cross attention resolutions ======")
+        print(resolutions)
+        for i, res in enumerate(resolutions):
+            C = model_channels * channel_mult[i]
+            self.cross_attn[str(res)] = CrossAttentionLayer(
+                channels=C,
+                num_heads=num_heads,
+                num_head_channels=num_head_channels,
+                use_checkpoint=use_checkpoint,
+                use_new_attention_order=use_new_attention_order,
+            )
 
         if self.num_classes is not None:
             self.label_emb = nn.Embedding(num_classes, time_embed_dim)
@@ -634,20 +729,26 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
-    def forward(self, x, timesteps, y=None):
+    
+    def forward(self, x, timesteps, y=None, encoder_features=None):
         """
         Apply the model to an input batch.
 
         :param x: an [N x C x ...] Tensor of inputs.
         :param timesteps: a 1-D batch of timesteps.
         :param y: an [N] Tensor of labels, if class-conditional.
+        :param encoder_features: dict mapping int resolutions → [B,C,res,res] feature maps
         :return: an [N x C x ...] Tensor of outputs.
         """
+        print("---------------------------UNetModel forward method called---------------------------")
+        if encoder_features is not None:
+            print("------ Received encoder features in UNetModel forward------")
+        
         assert (y is not None) == (
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
 
-        hs = []
+        hs = []  # for skip connections in the up path
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
         if self.num_classes is not None:
@@ -655,15 +756,103 @@ class UNetModel(nn.Module):
             emb = emb + self.label_emb(y)
 
         h = x.type(self.dtype)
-        for module in self.input_blocks:
+
+        # 3) downsampling path with cross-attention
+        res = self.image_size  # 256
+        print(f"===== res = {res} in forward in UNetModel =====")
+        
+        # Process all input blocks sequentially and keep track of features
+        # for skip connections, just like in the original code
+        for i, module in enumerate(self.input_blocks):
             h = module(h, emb)
+            
+            # Add debugging info
+            if i % 3 == 0:
+                print(f"[Level {i//3}] after ResBlock1 — res={res}, h.shape={tuple(h.shape)}")
+                # Apply cross-attention after first ResBlock (except at the highest resolution)
+                if encoder_features is not None and res != 256:
+                    enc_feat = encoder_features[res]  # int key
+                    print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
+                    h = self.cross_attn[str(res)](h, enc_feat)
+                    print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
+            elif i % 3 == 1:
+                print(f"[Level {i//3}] after ResBlock2 — res={res}, h.shape={tuple(h.shape)}")
+            elif i % 3 == 2:
+                print(f"[Level {i//3}] after Downsample — new res={res//2}, h.shape={tuple(h.shape)}")
+                res //= 2
+                
+            # IMPORTANT: Append to hs list for all intermediate features
+            # This is critical for the skip connections during upsampling
             hs.append(h)
-        h = self.middle_block(h, emb)
+
+        # 4) middle (bottleneck) with cross-attention at res=8
+        print("---- MIDDLE BLOCK ----")
+        h = self.middle_block[0](h, emb)
+        print(f" middle after ResBlock1 — h.shape={tuple(h.shape)}")
+
+        if encoder_features is not None:
+            enc_feat = encoder_features[8]  # bottleneck is at resolution 8
+            print(f"  enc_feat[8].shape = {tuple(enc_feat.shape)}")
+            # Use string "8" as key if that's how you've defined your cross_attn dict
+            h = self.cross_attn["8"](h, enc_feat)
+            print(f"  after middle CrossAttn — h.shape={tuple(h.shape)}")
+
+        h = self.middle_block[1](h)
+        print(f" middle after SelfAttn — h.shape={tuple(h.shape)}")
+        h = self.middle_block[2](h, emb)
+        print(f" middle after ResBlock2 — h.shape={tuple(h.shape)}")
+
+        # Debug: print all hs shapes before upsampling path
+        # for i, tensor in enumerate(hs):
+        #     print(f"  hs[{i}].shape = {tuple(tensor.shape)}")
+
+        # 5) upsampling path (unchanged)
         for module in self.output_blocks:
-            h = th.cat([h, hs.pop()], dim=1)
+            skip = hs.pop()
+            # print(f"  Upsampling: h.shape={tuple(h.shape)}, skip.shape={tuple(skip.shape)}")
+            h = th.cat([h, skip], dim=1)
             h = module(h, emb)
-        h = h.type(x.dtype)
+
         return self.out(h)
+    
+    # def forward(self, x, timesteps, y=None, encoder_features=None):
+    #     """
+    #     Apply the model to an input batch.
+
+    #     :param x: an [N x C x ...] Tensor of inputs.
+    #     :param timesteps: a 1-D batch of timesteps.
+    #     :param y: an [N] Tensor of labels, if class-conditional.
+    #     :return: an [N x C x ...] Tensor of outputs.
+    #     """
+    #     print("---------------------------UNetModel forward method called---------------------------")
+    #     if encoder_features is not None:
+    #         print("------ Received encoder features in UNetModel forward------")
+
+    #     assert (y is not None) == (
+    #         self.num_classes is not None
+    #     ), "must specify y if and only if the model is class-conditional"
+
+    #     hs = []
+    #     emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+
+    #     if self.num_classes is not None:
+    #         assert y.shape == (x.shape[0],)
+    #         emb = emb + self.label_emb(y)
+
+    #     h = x.type(self.dtype)
+    #     for module in self.input_blocks:
+    #         h = module(h, emb)
+    #         hs.append(h)
+    #     h = self.middle_block(h, emb)
+
+    #     for i in hs:
+    #         print(f"  hs[i].shape = {tuple(i.shape)}")
+    #     for module in self.output_blocks:
+    #         h = th.cat([h, hs.pop()], dim=1)
+    #         h = module(h, emb)
+    #     h = h.type(x.dtype)
+    #     return self.out(h)
+
 
 
 class SuperResModel(UNetModel):

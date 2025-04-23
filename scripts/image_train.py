@@ -19,8 +19,23 @@ from guided_diffusion.script_util import (
 from guided_diffusion.train_util import TrainLoop
 # from visdom import Visdom
 # viz = Visdom(port=8850)
+from guided_diffusion.encoder import AEEncoder
+from timm.utils import ModelEmaV3
 
 def main():
+    print("---------------------------In Main in image_train.py---------------------------")
+
+    encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/diffusion-anomaly/encoder/checkpoint_epoch20.pth", map_location="cpu")
+    base_encoder = AEEncoder(in_channels=4)
+
+    ema_encoder_model = ModelEmaV3(base_encoder, decay=0.999)
+    ema_encoder_model.load_state_dict(encoder_checkpoint['ema_encoder'])
+
+    ema_encoder = ema_encoder_model.module
+    ema_encoder = ema_encoder.to(dist_util.dev())
+    ema_encoder.eval()
+    print("---------------------------ema_encoder loaded and set to eval mode---------------------------")
+
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
@@ -52,7 +67,7 @@ def main():
         )
         print('dataset is chexpert')
 
-    logger.log("training...")
+    logger.log("training... started")
     TrainLoop(
         model=model,
         diffusion=diffusion,
@@ -69,7 +84,8 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
-        dataset=args.dataset
+        dataset=args.dataset,
+        encoder=ema_encoder,
     ).run_loop()
 
 

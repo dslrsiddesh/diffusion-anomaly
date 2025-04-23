@@ -1040,7 +1040,7 @@ class GaussianDiffusion:
 
 
    # def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
-    def training_losses(self, model,  x_start, t, classifier=None, model_kwargs=None, noise=None):
+    def training_losses(self, model,  x_start, t, classifier=None, model_kwargs=None, noise=None, encoder_features=None):
         """
         Compute training losses for a single timestep.
         :param model: the model to evaluate loss on.
@@ -1052,6 +1052,9 @@ class GaussianDiffusion:
         :return: a dict with the key "loss" containing a tensor of shape [N].
                  Some mean or variance settings may also have other keys.
         """
+        print("------------ in training_losses ------------------")
+        if encoder_features is not None:
+            print("------- Received encoder features -----------")
         if model_kwargs is None:
             model_kwargs = {}
         if noise is None:
@@ -1061,6 +1064,7 @@ class GaussianDiffusion:
         terms = {}
 
         if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
+            print("------ loss type kl --------")
             terms["loss"] = self._vb_terms_bpd(
                 model=model,
                 x_start=x_start,
@@ -1072,7 +1076,9 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+            print("------ loss type mse --------")
+            print("------ passing encoder features to model here--------")
+            model_output = model(x_t, self._scale_timesteps(t), encoder_features=encoder_features, **model_kwargs)
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,

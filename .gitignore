@@ -7,3 +7,6 @@ results/
 
 # exclude sampled outputs
 sampled/
+/fresh_data
+/encoder
+*.nii

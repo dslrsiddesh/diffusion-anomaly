@@ -97,8 +97,10 @@ def create_model_and_diffusion(
     resblock_updown,
     use_fp16,
     use_new_attention_order,
-    dataset
+    dataset,
 ):
+    print("--------------------------- in create_model_and_diffusion in script_util.py ---------------------------")
+
     print('timestepresp1',timestep_respacing )
     model = create_model(
         image_size,
@@ -151,6 +153,7 @@ def create_model(
     use_new_attention_order=False,
     dataset='brats'
 ):
+    print("--------------------------- in create_model in script_util.py ---------------------------")
     if channel_mult == "":
         if image_size == 512:
             channel_mult = (1, 1, 2, 2, 4, 4)
@@ -415,8 +418,10 @@ def create_gaussian_diffusion(
     predict_xstart=False,
     rescale_timesteps=False,
     rescale_learned_sigmas=False,
-    timestep_respacing="",
+    timestep_respacing=""
 ):
+    print("--------------------------- in create_gaussian_diffusion in script_util.py ---------------------------")
+
     betas = gd.get_named_beta_schedule(noise_schedule, steps)
     if use_kl:
         loss_type = gd.LossType.RESCALED_KL

@@ -43,7 +43,16 @@ class TrainLoop:
         weight_decay=0.0,
         lr_anneal_steps=0,
         dataset='brats',
+        encoder=None,
     ):
+        print("------------------------- Instantiate TrainLoop in train_util.py -------------------------")
+        self.encoder = encoder
+        if encoder is not None:
+            print("----- Received encoder with type ", type(encoder), "-----")
+            self.encoder.to(dist_util.dev())
+            self.encoder.eval()
+            self.encoder.requires_grad_(False)
+
         self.model = model
         self.diffusion = diffusion
         self.datal = data
@@ -159,6 +168,7 @@ class TrainLoop:
             self.opt.load_state_dict(state_dict)
 
     def run_loop(self):
+        print("---------------------------run_loop in train_util.py---------------------------")
         i = 0
 
         while (
@@ -166,6 +176,7 @@ class TrainLoop:
             or self.step + self.resume_step < self.lr_anneal_steps
         ):
             if self.dataset=='brats':
+                print("---------------------------trying on brats in train_util.py---------------------------")
                 try:
                     batch, cond, label = next(self.iterdatal)
                 except:
@@ -207,6 +218,17 @@ class TrainLoop:
                 k: v[i : i + self.microbatch].to(dist_util.dev())
                 for k, v in cond.items()
             }
+
+            # -------------- ENCODER FEATURE EXTRACTION ----------------
+            if self.encoder is not None:
+                print("===== Encoder features extraction in forward_backward fucntion in TrainLoop in train_util.py =====")
+                with th.no_grad():
+                    encoder_features = self.encoder(micro)
+                    print('encoder_feats: ', encoder_features.keys())
+            else:
+                encoder_features = None
+                print("===== No encoder features extraction =====")
+            # ----------------------------------------------------------
        
             # last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
@@ -217,6 +239,7 @@ class TrainLoop:
                 micro,
                 t,
                 model_kwargs=micro_cond,
+                encoder_features=encoder_features,
             )
 
             # if last_batch or not self.use_ddp:
