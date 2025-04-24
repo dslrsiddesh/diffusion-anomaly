@@ -304,6 +304,8 @@ class CrossAttentionLayer(nn.Module):
         enc: [B, C, H, W] — AE encoder feature map (key & value)
         returns: [B, C, H, W]
         """
+        # print("---------------------------CrossAttentionLayer forward method called---------------------------")
+        # print(f"  x.shape = {tuple(x.shape)}, enc.shape = {tuple(enc.shape)}")
         if self.use_checkpoint:
             return checkpoint(self._forward, (x, enc), self.parameters(), True)
         else:
@@ -763,27 +765,65 @@ class UNetModel(nn.Module):
         
         # Process all input blocks sequentially and keep track of features
         # for skip connections, just like in the original code
-        for i, module in enumerate(self.input_blocks):
-            h = module(h, emb)
+        # for i, module in enumerate(self.input_blocks):
+        #     h = module(h, emb)
             
-            # Add debugging info
-            if i % 3 == 0:
-                print(f"[Level {i//3}] after ResBlock1 — res={res}, h.shape={tuple(h.shape)}")
-                # Apply cross-attention after first ResBlock (except at the highest resolution)
-                if encoder_features is not None and res != 256:
-                    enc_feat = encoder_features[res]  # int key
-                    print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
-                    h = self.cross_attn[str(res)](h, enc_feat)
-                    print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
-            elif i % 3 == 1:
-                print(f"[Level {i//3}] after ResBlock2 — res={res}, h.shape={tuple(h.shape)}")
-            elif i % 3 == 2:
-                print(f"[Level {i//3}] after Downsample — new res={res//2}, h.shape={tuple(h.shape)}")
-                res //= 2
+        #     # Add debugging info
+        #     if i % 3 == 0:
+        #         print(f"[Level {i//3}] after ResBlock1 — res={res}, h.shape={tuple(h.shape)}")
+        #         # Apply cross-attention after first ResBlock (except at the highest resolution)
+        #         if encoder_features is not None and res != 256:
+        #             enc_feat = encoder_features[res]  # int key
+        #             print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
+        #             h = self.cross_attn[str(res)](h, enc_feat)
+        #             print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
+        #     elif i % 3 == 1:
+        #         print(f"[Level {i//3}] after ResBlock2 — res={res}, h.shape={tuple(h.shape)}")
+        #     elif i % 3 == 2:
+        #         print(f"[Level {i//3}] after Downsample — new res={res//2}, h.shape={tuple(h.shape)}")
+        #         res //= 2
                 
-            # IMPORTANT: Append to hs list for all intermediate features
-            # This is critical for the skip connections during upsampling
+        #     # IMPORTANT: Append to hs list for all intermediate features
+        #     # This is critical for the skip connections during upsampling
+        #     hs.append(h)
+
+        block_idx = 0
+        for level in range(len(self.channel_mult)):
+            # First ResBlock
+            h = self.input_blocks[block_idx](h, emb)
             hs.append(h)
+            print(f"[Level {level}] after ResBlock1 — res={res}, h.shape={tuple(h.shape)}")
+            block_idx += 1
+            
+            # Apply cross-attention after first ResBlock (except at the highest resolution)
+            if encoder_features is not None and res != 256 and level != 2 and level != 4:
+                # print("level = ", level)
+                enc_feat = encoder_features[res]
+                print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
+                h = self.cross_attn[str(res)](h, enc_feat)
+                print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
+            
+            # Second ResBlock
+            h = self.input_blocks[block_idx](h, emb)
+            print(f"[Level {level}] after ResBlock2 — res={res}, h.shape={tuple(h.shape)}")
+            block_idx += 1
+
+            if encoder_features is not None and res != 256 and (level == 2 or level == 4):
+                # print("level = ", level)
+                enc_feat = encoder_features[res]
+                print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
+                h = self.cross_attn[str(res)](h, enc_feat)
+                print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
+            
+            # Skip connection for upsampling later
+            hs.append(h)
+            
+            # Downsample if not last level
+            h = self.input_blocks[block_idx](h, emb)
+            print(f"[Level {level}] after Downsample — new res={res//2}, h.shape={tuple(h.shape)}")
+            block_idx += 1
+            hs.append(h)
+            res //= 2
 
         # 4) middle (bottleneck) with cross-attention at res=8
         print("---- MIDDLE BLOCK ----")
@@ -803,8 +843,8 @@ class UNetModel(nn.Module):
         print(f" middle after ResBlock2 — h.shape={tuple(h.shape)}")
 
         # Debug: print all hs shapes before upsampling path
-        # for i, tensor in enumerate(hs):
-        #     print(f"  hs[{i}].shape = {tuple(tensor.shape)}")
+        for i, tensor in enumerate(hs):
+            print(f"  hs[{i}].shape = {tuple(tensor.shape)}")
 
         # 5) upsampling path (unchanged)
         for module in self.output_blocks:
@@ -841,6 +881,8 @@ class UNetModel(nn.Module):
 
     #     h = x.type(self.dtype)
     #     for module in self.input_blocks:
+    #         print("module = ", type(module))
+    #         print("h.shape = ", h.shape)
     #         h = module(h, emb)
     #         hs.append(h)
     #     h = self.middle_block(h, emb)
