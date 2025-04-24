@@ -60,3 +60,7 @@ For sampling using the DDPM approach, run
 ```
 python scripts/classifier_sample_known.py  --data_dir path_to_testdata  --model_path ./results/model.pt --classifier_path ./results/classifier.pt  --dataset brats_or_chexpert --classifier_scale 100 --noise_level 500 $MODEL_FLAGS $DIFFUSION_FLAGS $CLASSIFIER_FLAGS
 ```
+
+```
+python scripts/encoder_sample_known.py  --data_dir /Users/siddesh/Desktop/fresh/diffusion-anomaly/brats-data  --model_path /Users/siddesh/Desktop/fresh/diffusion-anomaly/results/brats2update000000.pt --classifier_path /Users/siddesh/Desktop/fresh/diffusion-anomaly/results/emabrats2update_0.9999_000000.pt --dataset brats --classifier_scale 0 --noise_level 3 $MODEL_FLAGS $DIFFUSION_FLAGS  $SAMPLE_FLAGS
+```

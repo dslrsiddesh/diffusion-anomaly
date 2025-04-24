@@ -49,7 +49,7 @@ class BRATSDataset(torch.utils.data.Dataset):
         filedict = self.database[x]
         for seqtype in self.seqtypes:
             # print(filedict['t1'])
-            number=filedict['t1'].split('/')[2]
+            number=filedict['t1'].split('/')[-2]
             nib_img = nibabel.load(filedict[seqtype])
             out.append(torch.tensor(nib_img.get_fdata()))
         out = torch.stack(out)

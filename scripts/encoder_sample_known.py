@@ -27,6 +27,11 @@ from guided_diffusion.script_util import (
     add_dict_to_argparser,
     args_to_dict,
 )
+
+from guided_diffusion.encoder import AEEncoder
+from timm.utils import ModelEmaV3
+
+
 def visualize(img):
     _min = img.min()
     _max = img.max()
@@ -34,6 +39,19 @@ def visualize(img):
     return normalized_img
 
 def main():
+    print('------------------------ in main ------------------------')
+
+    encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/diffusion-anomaly/encoder/checkpoint_epoch20.pth", map_location="cpu")
+    base_encoder = AEEncoder(in_channels=4)
+
+    ema_encoder_model = ModelEmaV3(base_encoder, decay=0.999)
+    ema_encoder_model.load_state_dict(encoder_checkpoint['ema_encoder'])
+
+    ema_encoder = ema_encoder_model.module
+    ema_encoder = ema_encoder.to(dist_util.dev())
+    ema_encoder.eval()
+    print("---------------------------ema_encoder loaded and set to eval mode---------------------------")
+
     args = create_argparser().parse_args()
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
@@ -45,6 +63,7 @@ def main():
     model, diffusion = create_model_and_diffusion(
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
+    print("------------------------- before brats ------------------------")
     if args.dataset=='brats':
       ds = BRATSDataset(args.data_dir, test_flag=True)
       datal = th.utils.data.DataLoader(
@@ -60,6 +79,7 @@ def main():
          class_cond=True,
      )
      datal = iter(data)
+    print("----------------- after brats ------------------------")
    
     model.load_state_dict(
         dist_util.load_state_dict(args.model_path, map_location="cpu")
@@ -69,39 +89,49 @@ def main():
         model.convert_to_fp16()
     model.eval()
 
-    logger.log("loading classifier...")
-    classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
-    classifier.load_state_dict(
-        dist_util.load_state_dict(args.classifier_path)
-    )
+    # logger.log("loading classifier...")
+    # classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
+    # classifier.load_state_dict(
+    #     dist_util.load_state_dict(args.classifier_path)
+    # )
 
-    print('loaded classifier')
+    # print('loaded classifier')
     p1 = np.array([np.array(p.shape).prod() for p in model.parameters()]).sum()
-    p2 = np.array([np.array(p.shape).prod() for p in classifier.parameters()]).sum()
-    print('pmodel', p1, 'pclass', p2)
+    # p2 = np.array([np.array(p.shape).prod() for p in classifier.parameters()]).sum()
+    # print('pmodel', p1, 'pclass', p2)
+    print('pmodel', p1)
 
 
-    classifier.to(dist_util.dev())
-    if args.classifier_use_fp16:
-        classifier.convert_to_fp16()
-    classifier.eval()
+    # classifier.to(dist_util.dev())
+    # if args.classifier_use_fp16:
+        # classifier.convert_to_fp16()
+    # classifier.eval()
 
 
-    def cond_fn(x, t,  y=None):
-        assert y is not None
-        with th.enable_grad():
-            x_in = x.detach().requires_grad_(True)
-            logits = classifier(x_in, t)
-            log_probs = F.log_softmax(logits, dim=-1)
-            selected = log_probs[range(len(logits)), y.view(-1)]
-            a=th.autograd.grad(selected.sum(), x_in)[0]
-            return  a, a * args.classifier_scale
+    # def cond_fn(x, t,  y=None):
+    #     assert y is not None
+    #     with th.enable_grad():
+    #         x_in = x.detach().requires_grad_(True)
+    #         logits = classifier(x_in, t)
+    #         log_probs = F.log_softmax(logits, dim=-1)
+    #         selected = log_probs[range(len(logits)), y.view(-1)]
+    #         a=th.autograd.grad(selected.sum(), x_in)[0]
+    #         return  a, a * args.classifier_scale
 
 
 
     def model_fn(x, t, y=None):
+        print("------------------------ in model_fn ------------------------")
         assert y is not None
-        return model(x, t, y if args.class_cond else None)
+        if ema_encoder is not None:
+            print("===== Encoder features extraction in model_fn in encoder_sample_known.py =====")
+            with th.no_grad():
+                encoder_features = ema_encoder(x)
+                print('encoder_feats: ', encoder_features.keys())
+        else:
+            encoder_features = None
+            print("===== No encoder features extraction because of the model=None =====")
+        return model(x, t, y if args.class_cond else None, encoder_features=encoder_features)
 
     logger.log("sampling...")
     all_images = []
@@ -138,24 +168,24 @@ def main():
             diffusion.p_sample_loop_known if not args.use_ddim else diffusion.ddim_sample_loop_known
         )
         print('samplefn', sample_fn)
-        start = th.cuda.Event(enable_timing=True)
-        end = th.cuda.Event(enable_timing=True)
-        start.record()
+        # start = th.cuda.Event(enable_timing=True)
+        # end = th.cuda.Event(enable_timing=True)
+        # start.record()
         sample, x_noisy, org = sample_fn(
             model_fn,
             (args.batch_size, 4, args.image_size, args.image_size), img, org=img,
             clip_denoised=args.clip_denoised,
             model_kwargs=model_kwargs,
-            cond_fn=cond_fn,
+            cond_fn=None,
             device=dist_util.dev(),
             noise_level=args.noise_level
         )
-        end.record()
-        th.cuda.synchronize()
-        th.cuda.current_stream().synchronize()
+        # end.record()
+        # th.cuda.synchronize()
+        # th.cuda.current_stream().synchronize()
 
 
-        print('time for 1000', start.elapsed_time(end))
+        # print('time for 1000', start.elapsed_time(end))
 
         if args.dataset=='brats':
         #   viz.image(visualize(sample[0,0, ...]), opts=dict(caption="sampled output0"))

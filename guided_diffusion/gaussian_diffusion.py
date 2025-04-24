@@ -255,6 +255,7 @@ class GaussianDiffusion:
     def p_mean_variance(
             self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None
     ):
+        print("--------------------- in p_mean_variance ---------------------")
         """
         Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
         the initial x, x_0.
@@ -550,6 +551,7 @@ class GaussianDiffusion:
         progress=False,
         classifier=None
     ):
+        print("--------------------- in p_sample_loop_known ---------------------")
         if device is None:
             device = next(model.parameters()).device
         assert isinstance(shape, (tuple, list))
@@ -705,6 +707,7 @@ class GaussianDiffusion:
             model_kwargs=None,
             eta=0.0,
     ):
+        print("--------------------- in ddim_sample ---------------------")
         """
         Sample x_{t-1} from the model using DDIM.
 
@@ -742,7 +745,8 @@ class GaussianDiffusion:
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
         sample = mean_pred + nonzero_mask * sigma * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"], "saliency": saliency }
+        # return {"sample": sample, "pred_xstart": out["pred_xstart"], "saliency": saliency }
+        return {"sample": sample, "pred_xstart": out["pred_xstart"], "saliency": None }
 
 
     def ddim_reverse_sample(
@@ -754,7 +758,8 @@ class GaussianDiffusion:
         denoised_fn=None,
         model_kwargs=None,
         eta=0.0,
-    ):
+    ):  
+        print("--------------------- in ddim_reverse_sample ---------------------")
         """
         Sample x_{t+1} from the model using DDIM reverse ODE.
         """
@@ -890,6 +895,7 @@ class GaussianDiffusion:
             classifier=None,
             eta = 0.0
     ):
+        print("--------------------- in ddim_sample_loop_known ---------------------")
         if device is None:
             device = next(model.parameters()).device
         assert isinstance(shape, (tuple, list))
@@ -941,6 +947,7 @@ class GaussianDiffusion:
         progress=False,
         eta=0.0,
     ):
+        print("--------------------- in ddim_sample_loop_progressive ---------------------")
         """
         Use DDIM to sample from the model and yield intermediate samples from
         each timestep of DDIM.
