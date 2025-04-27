@@ -25,15 +25,23 @@ from timm.utils import ModelEmaV3
 def main():
     print("---------------------------In Main in image_train.py---------------------------")
 
-    encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/diffusion-anomaly/encoder/checkpoint_epoch20.pth", map_location="cpu")
-    base_encoder = AEEncoder(in_channels=4)
+    encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/encoder/checkpoint_epoch20.pth", map_location="cpu")
+    base_encoder = AEEncoder(in_channels=2)
 
+    # if ema model, load like this
     ema_encoder_model = ModelEmaV3(base_encoder, decay=0.999)
     ema_encoder_model.load_state_dict(encoder_checkpoint['ema_encoder'])
 
     ema_encoder = ema_encoder_model.module
     ema_encoder = ema_encoder.to(dist_util.dev())
     ema_encoder.eval()
+
+    # if regular model, load like this
+    # keeping the same name as ema for consistency
+    # base_encoder.load_state_dict(encoder_checkpoint['encoder'])
+    # ema_encoder = base_encoder
+    # ema_encoder = ema_encoder.to(dist_util.dev())
+    # ema_encoder.eval()
     print("---------------------------ema_encoder loaded and set to eval mode---------------------------")
 
     args = create_argparser().parse_args()

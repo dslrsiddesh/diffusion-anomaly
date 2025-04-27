@@ -136,7 +136,7 @@ def main():
     logger.log("sampling...")
     all_images = []
     all_labels = []
-
+    
     for img in datal:
         model_kwargs = {}
      #   img = next(data)  # should return an image from the dataloader "data"

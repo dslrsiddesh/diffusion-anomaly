@@ -22,9 +22,9 @@ class BRATSDataset(torch.utils.data.Dataset):
 
         self.test_flag=test_flag
         if test_flag:
-            self.seqtypes = ['t1', 't1ce', 't2', 'flair']
+            self.seqtypes = ['t2', 'flair']
         else:
-            self.seqtypes = ['t1', 't1ce', 't2', 'flair', 'seg']
+            self.seqtypes = ['t2', 'flair', 'seg']
 
         self.seqtypes_set = set(self.seqtypes)
         self.database = []

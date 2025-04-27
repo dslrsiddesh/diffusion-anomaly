@@ -10,11 +10,96 @@ from tqdm import tqdm
 from timm.utils import ModelEmaV3
 import wandb
 
-# wandb.login(key="b3990523b6efe11b984fad8a8e64911f78399735") 
+import torch
+import os.path
+import nibabel
+
+wandb.login(key="b3990523b6efe11b984fad8a8e64911f78399735") 
+
+class BRATSDataset(torch.utils.data.Dataset):
+    def __init__(self, directory, test_flag=False):
+        '''
+        directory is expected to contain some folder structure:
+                  if some subfolder contains only files, all of these
+                  files are assumed to have a name like
+                  brats_train_001_XXX_123_w.nii.gz
+                  where XXX is one of t1, t1ce, t2, flair, seg
+                  we assume these five files belong to the same image
+                  seg is supposed to contain the segmentation
+        '''
+        super().__init__()
+        self.directory = os.path.expanduser(directory)
+
+        self.test_flag=test_flag
+        if test_flag:
+            self.seqtypes = ['t2', 'flair']
+        else:
+            self.seqtypes = ['t2', 'flair', 'seg']
+
+        self.seqtypes_set = set(self.seqtypes)
+        self.database = []
+        for root, dirs, files in os.walk(self.directory):
+            # if there are no subdirs, we have data
+            if not dirs:
+                files.sort()
+                datapoint = dict()
+                # extract all files as channels
+                for f in files:
+                    # print("Extracting: ", f)
+                    if(len(f.split('_'))<4):
+                        continue
+                    seqtype = f.split('_')[3]
+                    datapoint[seqtype] = os.path.join(root, f)
+                assert set(['t2', 'flair', 'seg']) == self.seqtypes_set, \
+                    f'datapoint is incomplete, keys are {datapoint.keys()}'
+                self.database.append(datapoint)
+
+    def __getitem__(self, x):
+        out = []
+        filedict = self.database[x]
+        for seqtype in self.seqtypes:
+            # print(filedict['t1'])
+            number=filedict['t1'].split('/')[-2]
+            nib_img = nibabel.load(filedict[seqtype])
+            out.append(torch.tensor(nib_img.get_fdata()))
+        out = torch.stack(out)
+        out_dict = {}
+        if self.test_flag:
+            # change path here according to the data's path
+            path2 = './brats-data/test_labels/' + str(
+                number) + '-label.nii'
+
+
+            seg=nibabel.load(path2)
+            seg=seg.get_fdata()
+            image = torch.zeros(2, 256, 256)
+            image[:, 8:-8, 8:-8] = out
+            label = seg[None, ...]
+            if seg.max() > 0:
+                weak_label = 1
+            else:
+                weak_label = 0
+            out_dict["y"]=weak_label
+        else:
+            image = torch.zeros(2,256,256)
+            image[:,8:-8,8:-8]=out[:-1,...]		#pad to a size of (256,256)
+            label = out[-1, ...][None, ...]
+            if label.max()>0:
+                weak_label=1
+            else:
+                weak_label=0
+            out_dict["y"] = weak_label
+
+        return (image, out_dict, weak_label, label, number )
+
+    def __len__(self):
+        return len(self.database)
+    
+
 class AEEncoder(nn.Module):
     def __init__(
         self,
-        in_channels: int = 1,
+        in_channels: int = 2,
         model_channels: int = 128,
         channel_mult: tuple = (1, 1, 2, 2, 4, 4),
         num_res_blocks: int = 2,
@@ -77,6 +162,7 @@ class AEEncoder(nn.Module):
         ])
         
     def forward(self, x):
+        print(f"Input shape: {x.shape}")
         features = {}
         # print(f"Input shape: {x.shape}")
         
@@ -117,7 +203,7 @@ class AEEncoder(nn.Module):
             
         return features
 class Decoder(nn.Module):
-    def __init__(self, base_channels=128, out_channels=4):
+    def __init__(self, base_channels=128, out_channels=2):
         super().__init__()
         self.base_channels = base_channels
         
@@ -187,6 +273,8 @@ class Decoder(nn.Module):
         
         # Final convolution
         x = self.final(x)  # Shape becomes [batch, out_channels, 256, 256]
+
+        print(f"Final output shape for this batch: {x.shape}")
         
         return x
         
@@ -209,7 +297,7 @@ def plot_reconstruction(images, recons, epoch, recon_path, model_name):
     plt.tight_layout()
     
     plt.savefig(f"{recon_path}/recons_e{epoch}_{model_name}.png", bbox_inches='tight')  # Save as PNG
-    wandb.log({f"recons_e{epoch}": wandb.Image(plt)})
+    wandb.log({f"recons_e{epoch}_{model_name}": wandb.Image(plt)})
     plt.close()
 
 
@@ -239,8 +327,8 @@ def train_autoencoder(
     recon_path = f"{save_path}/unhealthy21_reconstructions"
     os.makedirs(recon_path, exist_ok=True)
 
-    encoder = AEEncoder(in_channels=4).to(device)
-    decoder = Decoder().to(device)
+    encoder = AEEncoder(in_channels=2).to(device)
+    decoder = Decoder(out_channels=2).to(device)
 
     ema_encoder = ModelEmaV3(encoder, decay=ema_decay, device=device)
     ema_decoder = ModelEmaV3(decoder, decay=ema_decay, device=device)
@@ -440,10 +528,10 @@ if __name__ == "__main__":
 
     train_autoencoder(
         device=DEVICE,
-        epochs=2,
+        epochs=200,
         save_path="sid_checkpoints/",
         eval_freq=1,    # eval after num epochs
-        save_freq=10,    # save ckpt after num epochs
+        save_freq=5,    # save ckpt after num epochs
         batch_size=12,
         lr=1e-4,
         ema_decay=0.999,
@@ -527,3 +615,4 @@ if __name__ == "__main__":
 
 #     # #########
 #     return
+# -----final------

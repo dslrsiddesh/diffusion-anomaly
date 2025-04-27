@@ -255,7 +255,7 @@ class GaussianDiffusion:
     def p_mean_variance(
             self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None
     ):
-        print("--------------------- in p_mean_variance ---------------------")
+        # print("--------------------- in p_mean_variance ---------------------")
         """
         Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
         the initial x, x_0.

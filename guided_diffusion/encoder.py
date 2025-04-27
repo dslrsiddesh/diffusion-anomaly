@@ -5,7 +5,7 @@ from guided_diffusion.unet import ResBlock, AttentionBlock, Downsample, Upsample
 class AEEncoder(nn.Module):
     def __init__(
         self,
-        in_channels: int = 1,
+        in_channels: int = 2,
         model_channels: int = 128,
         channel_mult: tuple = (1, 1, 2, 2, 4, 4),
         num_res_blocks: int = 2,
@@ -69,6 +69,7 @@ class AEEncoder(nn.Module):
         ])
         
     def forward(self, x):
+        print(f"Input shape: {x.shape}")
         features = {}
         # print(f"Input shape: {x.shape}")
         

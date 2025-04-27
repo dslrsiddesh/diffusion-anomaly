@@ -743,6 +743,7 @@ class UNetModel(nn.Module):
         :return: an [N x C x ...] Tensor of outputs.
         """
         print("---------------------------UNetModel forward method called---------------------------")
+        print(f"  x.shape = {tuple(x.shape)} - This shape should be like [B,2,256,256]")
         if encoder_features is not None:
             print("------ Received encoder features in UNetModel forward------")
         
@@ -792,59 +793,51 @@ class UNetModel(nn.Module):
             # First ResBlock
             h = self.input_blocks[block_idx](h, emb)
             hs.append(h)
-            print(f"[Level {level}] after ResBlock1 — res={res}, h.shape={tuple(h.shape)}")
+            # print(f"[Level {level}] after ResBlock1 — res={res}, h.shape={tuple(h.shape)}")
             block_idx += 1
-            
-            # Apply cross-attention after first ResBlock (except at the highest resolution)
-            if encoder_features is not None and res != 256 and level != 2 and level != 4:
-                # print("level = ", level)
-                enc_feat = encoder_features[res]
-                print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
-                h = self.cross_attn[str(res)](h, enc_feat)
-                print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
             
             # Second ResBlock
             h = self.input_blocks[block_idx](h, emb)
-            print(f"[Level {level}] after ResBlock2 — res={res}, h.shape={tuple(h.shape)}")
+            hs.append(h)
+            # print(f"[Level {level}] after ResBlock2 — res={res}, h.shape={tuple(h.shape)}")
             block_idx += 1
 
-            if encoder_features is not None and res != 256 and (level == 2 or level == 4):
+            if encoder_features is not None and res != 256:
                 # print("level = ", level)
                 enc_feat = encoder_features[res]
-                print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
+                # print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
                 h = self.cross_attn[str(res)](h, enc_feat)
-                print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
+                # print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
             
             # Skip connection for upsampling later
-            hs.append(h)
             
             # Downsample if not last level
             h = self.input_blocks[block_idx](h, emb)
-            print(f"[Level {level}] after Downsample — new res={res//2}, h.shape={tuple(h.shape)}")
+            # print(f"[Level {level}] after Downsample — new res={res//2}, h.shape={tuple(h.shape)}")
             block_idx += 1
             hs.append(h)
             res //= 2
 
         # 4) middle (bottleneck) with cross-attention at res=8
-        print("---- MIDDLE BLOCK ----")
+        # print("---- MIDDLE BLOCK ----")
         h = self.middle_block[0](h, emb)
-        print(f" middle after ResBlock1 — h.shape={tuple(h.shape)}")
+        # print(f" middle after ResBlock1 — h.shape={tuple(h.shape)}")
 
         if encoder_features is not None:
             enc_feat = encoder_features[8]  # bottleneck is at resolution 8
-            print(f"  enc_feat[8].shape = {tuple(enc_feat.shape)}")
+            # print(f"  enc_feat[8].shape = {tuple(enc_feat.shape)}")
             # Use string "8" as key if that's how you've defined your cross_attn dict
             h = self.cross_attn["8"](h, enc_feat)
-            print(f"  after middle CrossAttn — h.shape={tuple(h.shape)}")
+            # print(f"  after middle CrossAttn — h.shape={tuple(h.shape)}")
 
         h = self.middle_block[1](h)
-        print(f" middle after SelfAttn — h.shape={tuple(h.shape)}")
+        # print(f" middle after SelfAttn — h.shape={tuple(h.shape)}")
         h = self.middle_block[2](h, emb)
-        print(f" middle after ResBlock2 — h.shape={tuple(h.shape)}")
+        # print(f" middle after ResBlock2 — h.shape={tuple(h.shape)}")
 
         # Debug: print all hs shapes before upsampling path
-        for i, tensor in enumerate(hs):
-            print(f"  hs[{i}].shape = {tuple(tensor.shape)}")
+        # for i, tensor in enumerate(hs):
+        #     print(f"  hs[{i}].shape = {tuple(tensor.shape)}")
 
         # 5) upsampling path (unchanged)
         for module in self.output_blocks:

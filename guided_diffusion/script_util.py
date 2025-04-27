@@ -173,10 +173,12 @@ def create_model(
         attention_ds.append(image_size // int(res))
         
     if dataset=='brats':
-      number_in_channels=4
+    #   number_in_channels=4
+      number_in_channels=2
     else:
       number_in_channels=1
-    print('numberinchannels', number_in_channels)
+    print('number of input channels:', number_in_channels)
+    print("----- the above should be 2 now since we are considering only t2 and flair -----")
       
 
     return UNetModel(
