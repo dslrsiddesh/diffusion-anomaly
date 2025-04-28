@@ -171,6 +171,10 @@ class TrainLoop:
         print("---------------------------run_loop in train_util.py---------------------------")
         i = 0
 
+        self.gradient_accumulation_steps = 5
+        self.accumulated_loss = 0.0
+        self.accumulated_batch_count = 0
+
         while (
             not self.lr_anneal_steps
             or self.step + self.resume_step < self.lr_anneal_steps
@@ -201,16 +205,45 @@ class TrainLoop:
             self.save()
 
     def run_step(self, batch, cond):
+        if self.step % self.gradient_accumulation_steps == 0:
+            self.mp_trainer.zero_grad()
+            self.accumulated_loss = 0.0
+            self.accumulated_batch_count = 0
+            print(f"--------- Starting new gradient accumulation cycle ---------")
+
+        # Track which batch in the accumulation cycle we're on
+        current_batch_in_cycle = self.step % self.gradient_accumulation_steps + 1
+        print(f"Processing batch {current_batch_in_cycle}/{self.gradient_accumulation_steps} in accumulation cycle")
+            
         lossmse,  sample = self.forward_backward(batch, cond)
-        took_step = self.mp_trainer.optimize(self.opt)
-        if took_step:
-            self._update_ema()
+
+        self.accumulated_loss += lossmse.item()
+        self.accumulated_batch_count += 1
+
+        print(f"Batch {current_batch_in_cycle} - Loss: {lossmse.item():.6f}")
+
+        # End of accumulation cycle - perform optimization step
+        if(self.step + 1) % self.gradient_accumulation_steps == 0:
+            avg_loss = self.accumulated_loss / self.accumulated_batch_count
+            print(f"--------- Taking optimization step after accumulating {self.gradient_accumulation_steps} batches ---------")
+            print(f"Average accumulated loss: {avg_loss:.6f}")
+            
+            took_step = self.mp_trainer.optimize(self.opt)
+            if took_step:
+                self._update_ema()
+                print(f"Model weights updated")
+        else:
+            took_step = False
+                
         self._anneal_lr()
         self.log_step()
         return lossmse,  sample
 
     def forward_backward(self, batch, cond):
-        self.mp_trainer.zero_grad()
+        batch_loss = 0.0
+        batch_count = 0
+        last_sample = None
+
         for i in range(0, batch.shape[0], self.microbatch):
             micro = batch[i : i + self.microbatch].to(dist_util.dev())
             print('micro', micro.shape)
@@ -255,17 +288,26 @@ class TrainLoop:
                 )
             losses = losses1[0]
             sample = losses1[1]
+            last_sample = sample
 
             loss = (losses["loss"] * weights).mean()
 
+            loss = loss / self.gradient_accumulation_steps
+
             lossmse = (losses["mse"] * weights).mean().detach()
+
+            # Accumulate loss metrics for this batch
+            batch_loss += lossmse.item()
+            batch_count += 1
            
             log_loss_dict(
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
             self.mp_trainer.backward(loss)
 
-            return lossmse.detach(),  sample
+        # Return the average loss for this batch and the last sample
+        avg_batch_loss = batch_loss / batch_count if batch_count > 0 else 0
+        return th.tensor(avg_batch_loss).to(dist_util.dev()), last_sample
 
     def _update_ema(self):
         for rate, params in zip(self.ema_rate, self.ema_params):
