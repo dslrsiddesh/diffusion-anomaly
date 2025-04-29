@@ -21,6 +21,7 @@ from .losses import normal_kl, discretized_gaussian_log_likelihood
 from scipy import ndimage
 from torchvision import transforms
 import matplotlib.pyplot as plt
+from guided_diffusion.generate_noise import Simplex_CLASS, generate_simplex_noise
 def standardize(img):
     mean = th.mean(img)
     std = th.std(img)
@@ -143,7 +144,11 @@ class GaussianDiffusion:
         model_var_type,
         loss_type,
         rescale_timesteps=False,
-    ):
+    ):  
+        # sinplex noise function
+        self.simplex = Simplex_CLASS()
+        self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, in_channels=2)
+
         self.model_mean_type = model_mean_type
         print('self.model_meantype', self.model_mean_type)
         self.model_var_type = model_var_type
@@ -255,7 +260,7 @@ class GaussianDiffusion:
     def p_mean_variance(
             self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None
     ):
-        # print("--------------------- in p_mean_variance ---------------------")
+        print("--------------------- in p_mean_variance ---------------------")
         """
         Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
         the initial x, x_0.
@@ -563,7 +568,8 @@ class GaussianDiffusion:
         org=img[0].to(device)
         img=img[0].to(device)
         indices = list(range(t))[::-1]
-        noise = th.randn_like(img[:, :4, ...]).to(device)
+        # noise = th.randn_like(img[:, :4, ...]).to(device)
+        noise = self.noise_fn(img, )
         x_noisy = self.q_sample(x_start=img[:, :4, ...], t=t, noise=noise).to(device)
         x_noisy = torch.cat((x_noisy, img[:, 4:, ...]), dim=1)
         
@@ -905,7 +911,8 @@ class GaussianDiffusion:
         img = img[0].to(device)
         
         indices = list(range(t))[::-1]
-        noise = th.randn_like(img).to(device)
+        # noise = th.randn_like(img).to(device)
+        noise = self.noise_fn(img, t).float()
         x_noisy = self.q_sample(x_start=img, t=t, noise=noise).to(device)
         print('xnoisy', x_noisy.shape)
 
@@ -1065,7 +1072,8 @@ class GaussianDiffusion:
         if model_kwargs is None:
             model_kwargs = {}
         if noise is None:
-            noise = th.randn_like(x_start)
+            # noise = th.randn_like(x_start)
+            noise = self.noise_fn(x_start, t).float()
         x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}
