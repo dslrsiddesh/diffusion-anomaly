@@ -258,7 +258,7 @@ class GaussianDiffusion:
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def p_mean_variance(
-            self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None
+            self, model, x, t, clip_denoised=True, denoised_fn=None, encoder_features=None, model_kwargs=None
     ):
         print("--------------------- in p_mean_variance ---------------------")
         """
@@ -286,7 +286,7 @@ class GaussianDiffusion:
         B, C = x.shape[:2]
         
         assert t.shape == (B,)
-        model_output = model(x, self._scale_timesteps(t), **model_kwargs)
+        model_output = model(x, self._scale_timesteps(t), encoder_features=encoder_features, **model_kwargs)
         
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
             assert model_output.shape == (B, C * 2, *x.shape[2:])
@@ -502,6 +502,7 @@ class GaussianDiffusion:
             denoised_fn=None,
             cond_fn=None,
             model_kwargs=None,
+            encoder_features=None,
     ):
         """
         Sample x_{t-1} from the model at the given timestep.
@@ -519,15 +520,17 @@ class GaussianDiffusion:
                  - 'sample': a random sample from the model.
                  - 'pred_xstart': a prediction of x_0.
         """
+        print("--------------------- in p_sample ---------------------")
         out = self.p_mean_variance(
             model,
             x,
             t,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
+            encoder_features=encoder_features,
             model_kwargs=model_kwargs,
         )
-        noise = th.randn_like(x[:, :4, ...])
+        noise = th.randn_like(x[:, :2, ...])
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
@@ -554,7 +557,8 @@ class GaussianDiffusion:
         device=None,
         noise_level=500,
         progress=False,
-        classifier=None
+        classifier=None,
+        encoder_features=None,
     ):
         print("--------------------- in p_sample_loop_known ---------------------")
         if device is None:
@@ -569,9 +573,9 @@ class GaussianDiffusion:
         img=img[0].to(device)
         indices = list(range(t))[::-1]
         # noise = th.randn_like(img[:, :4, ...]).to(device)
-        noise = self.noise_fn(img, )
-        x_noisy = self.q_sample(x_start=img[:, :4, ...], t=t, noise=noise).to(device)
-        x_noisy = torch.cat((x_noisy, img[:, 4:, ...]), dim=1)
+        noise = self.noise_fn(img, t)
+        x_noisy = self.q_sample(x_start=img, t=t, noise=noise).to(device)
+        # x_noisy = torch.cat((x_noisy, img[:, 4:, ...]), dim=1)
         
         
         for sample in self.p_sample_loop_progressive(
@@ -586,7 +590,8 @@ class GaussianDiffusion:
             model_kwargs=model_kwargs,
             device=device,
             progress=progress,
-            classifier=classifier
+            classifier=classifier,
+            encoder_features=encoder_features,
         ):
             final = sample
       
@@ -648,7 +653,9 @@ class GaussianDiffusion:
         model_kwargs=None,
         device=None,
         progress=False,
-        classifier=None):
+        classifier=None,
+        encoder_features=None,
+        ):
         """
         Generate samples from the model and yield intermediate samples from
         each timestep of diffusion.
@@ -657,7 +664,7 @@ class GaussianDiffusion:
         Returns a generator over dicts, where each dict is the return value of
         p_sample().
         """
-
+        print("--------------------- in p_sample_loop_progressive ---------------------")
         if device is None:
             device = next(model.parameters()).device
         assert isinstance(shape, (tuple, list))
@@ -689,12 +696,13 @@ class GaussianDiffusion:
                         denoised_fn=denoised_fn,
                         cond_fn=cond_fn,
                         model_kwargs=model_kwargs,
+                        encoder_features=encoder_features,
                     )
                     yield out
                     img = out["sample"]
 
-                    if i%100==0:
-                     print('i', i)
+                    if i%20==0:
+                     print('diffusion reverse step:', i)
                     #  viz.image(visualize(img[0,0,...]), opts=dict(caption=str(i)))
                     #  viz.image(visualize(img[0, 1,...]), opts=dict(caption=str(i)))
                     #  viz.image(visualize(img[0, 2,...]), opts=dict(caption=str(i)))
