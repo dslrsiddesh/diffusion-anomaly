@@ -61,7 +61,7 @@ class BRATSDataset(torch.utils.data.Dataset):
 
             seg=nibabel.load(path2)
             seg=seg.get_fdata()
-            image = torch.zeros(4, 256, 256)
+            image = torch.zeros(2, 256, 256)
             image[:, 8:-8, 8:-8] = out
             label = seg[None, ...]
             if seg.max() > 0:
@@ -70,7 +70,7 @@ class BRATSDataset(torch.utils.data.Dataset):
                 weak_label = 0
             out_dict["y"]=weak_label
         else:
-            image = torch.zeros(4,256,256)
+            image = torch.zeros(2,256,256)
             image[:,8:-8,8:-8]=out[:-1,...]		#pad to a size of (256,256)
             label = out[-1, ...][None, ...]
             if label.max()>0:

@@ -571,6 +571,7 @@ class GaussianDiffusion:
 
         org=img[0].to(device)
         img=img[0].to(device)
+        print(f"Received img shape: {img.shape}")
         indices = list(range(t))[::-1]
         # noise = th.randn_like(img[:, :4, ...]).to(device)
         noise = self.noise_fn(img, t)

@@ -3,19 +3,18 @@ Generate a large batch of image samples from a model and save them as a large
 numpy array. This can be used to produce samples for FID evaluation.
 """
 import matplotlib.pyplot as plt
+import seaborn as sns
 import argparse
 import os
-# from visdom import Visdom
-# viz = Visdom(port=8850)
+from datetime import datetime
 import sys
-import nibabel as nib
 sys.path.append("..")
 sys.path.append(".")
 from guided_diffusion.bratsloader import BRATSDataset
 import torch.nn.functional as F
 import numpy as np
 import torch as th
-# import torch.distributed as dist
+import torch.distributed as dist
 from guided_diffusion.image_datasets import load_data
 from guided_diffusion import dist_util, logger
 from guided_diffusion.script_util import (
@@ -28,9 +27,14 @@ from guided_diffusion.script_util import (
     args_to_dict,
 )
 
+from scripts.evaluation import postprocess_evaluate
 from guided_diffusion.encoder import AEEncoder
 from timm.utils import ModelEmaV3
+import wandb
+wandb.login(key="b3990523b6efe11b984fad8a8e64911f78399735")
 
+project = "DDPM_Simplex_EVAL"
+wandb.init(project=project, reinit=True)
 
 def visualize(img):
     _min = img.min()
@@ -40,6 +44,8 @@ def visualize(img):
 
 def main():
     print('------------------------ in main ------------------------')
+    device = dist_util.dev()
+    print("Device:", device)
 
     encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/diffusion-anomaly/encoder/checkpoint_epoch20.pth", map_location="cpu")
     base_encoder = AEEncoder(in_channels=4)
@@ -71,14 +77,6 @@ def main():
         batch_size=args.batch_size,
         shuffle=False)
     
-    elif args.dataset=='chexpert':
-     data = load_data(
-         data_dir=args.data_dir,
-         batch_size=args.batch_size,
-         image_size=args.image_size,
-         class_cond=True,
-     )
-     datal = iter(data)
     print("----------------- after brats ------------------------")
    
     model.load_state_dict(
@@ -89,167 +87,110 @@ def main():
         model.convert_to_fp16()
     model.eval()
 
-    # logger.log("loading classifier...")
-    # classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
-    # classifier.load_state_dict(
-    #     dist_util.load_state_dict(args.classifier_path)
-    # )
+    # set current date and time as dir name for logs
+    now = datetime.now()
+    date_time_str = now.strftime("%Y-%m-%d_%H-%M-%S")
 
-    # print('loaded classifier')
     p1 = np.array([np.array(p.shape).prod() for p in model.parameters()]).sum()
-    # p2 = np.array([np.array(p.shape).prod() for p in classifier.parameters()]).sum()
-    # print('pmodel', p1, 'pclass', p2)
     print('pmodel', p1)
 
+    def model_fn(x, t, y=None, encoder_features=None):
+        if encoder_features is not None:
+            print(f"------ Encoder features received with starting shape: {encoder_features}------")
+        return model(x, t, y if args.class_cond else None, encoder_features=encoder_features)
 
-    # classifier.to(dist_util.dev())
-    # if args.classifier_use_fp16:
-        # classifier.convert_to_fp16()
-    # classifier.eval()
+    logger.log("sampling...")
+    all_numbers = []
+    all_images = []
+    all_labels = []
+    dice_scores = []
+    auprc_scores = []
 
+    for n, img in enumerate(datal):
+        model_kwargs = {}
+        print('img', img[0].shape, img[1])
+        if args.dataset=='brats':
+          Labelmask = th.where(img[3] > 0, 1, 0)
+          assert Labelmask.shape[-1] == 256
+          number=img[4][0]
+          if img[2]==0:
+              continue
+        else:
+            assert args.dataset=='brats'
 
-    # def cond_fn(x, t,  y=None):
-    #     assert y is not None
-    #     with th.enable_grad():
-    #         x_in = x.detach().requires_grad_(True)
-    #         logits = classifier(x_in, t)
-    #         log_probs = F.log_softmax(logits, dim=-1)
-    #         selected = log_probs[range(len(logits)), y.view(-1)]
-    #         a=th.autograd.grad(selected.sum(), x_in)[0]
-    #         return  a, a * args.classifier_scale
+        sample_fn = (
+            diffusion.p_sample_loop_known
+        )
+        print('sample fn = ', sample_fn)
 
+        start = th.cuda.Event(enable_timing=True)
+        end = th.cuda.Event(enable_timing=True)
+        start.record()
 
-
-    def model_fn(x, t, y=None):
-        print("------------------------ in model_fn ------------------------")
-        assert y is not None
         if ema_encoder is not None:
             print("===== Encoder features extraction in model_fn in encoder_sample_known.py =====")
             with th.no_grad():
-                encoder_features = ema_encoder(x)
+                encoder_features = ema_encoder(img)
                 print('encoder_feats: ', encoder_features.keys())
         else:
             encoder_features = None
             print("===== No encoder features extraction because of the model=None =====")
-        return model(x, t, y if args.class_cond else None, encoder_features=encoder_features)
 
-    logger.log("sampling...")
-    all_images = []
-    all_labels = []
-    
-    for img in datal:
-        model_kwargs = {}
-     #   img = next(data)  # should return an image from the dataloader "data"
-        print('img', img[0].shape, img[1])
-        if args.dataset=='brats':
-          Labelmask = th.where(img[3] > 0, 1, 0)
-          number=img[4][0]
-          if img[2]==0:
-              continue    #take only diseased images as input
-              
-        #   viz.image(visualize(img[0][0, 0, ...]), opts=dict(caption="img input 0"))
-        #   viz.image(visualize(img[0][0, 1, ...]), opts=dict(caption="img input 1"))
-        #   viz.image(visualize(img[0][0, 2, ...]), opts=dict(caption="img input 2"))
-        #   viz.image(visualize(img[0][0, 3, ...]), opts=dict(caption="img input 3"))
-        #   viz.image(visualize(img[3][0, ...]), opts=dict(caption="ground truth"))
-        else:
-        #   viz.image(visualize(img[0][0, ...]), opts=dict(caption="img input"))
-          print('img1', img[1])
-          number=img[1]["path"]
-          print('number', number)
-
-        if args.class_cond:
-            classes = th.randint(
-                low=0, high=1, size=(args.batch_size,), device=dist_util.dev()
-            )
-            model_kwargs["y"] = classes
-            print('y', model_kwargs["y"])
-        sample_fn = (
-            diffusion.p_sample_loop_known if not args.use_ddim else diffusion.ddim_sample_loop_known
-        )
-        print('samplefn', sample_fn)
-        # start = th.cuda.Event(enable_timing=True)
-        # end = th.cuda.Event(enable_timing=True)
-        # start.record()
         sample, x_noisy, org = sample_fn(
-            model_fn,
-            (args.batch_size, 4, args.image_size, args.image_size), img, org=img,
-            clip_denoised=args.clip_denoised,
-            model_kwargs=model_kwargs,
-            cond_fn=None,
-            device=dist_util.dev(),
-            noise_level=args.noise_level
-        )
-        # end.record()
-        # th.cuda.synchronize()
-        # th.cuda.current_stream().synchronize()
+                                        model_fn,
+                                        (args.batch_size, 2, args.image_size, args.image_size),
+                                        img, 
+                                        org=img,
+                                        clip_denoised=args.clip_denoised,
+                                        model_kwargs=model_kwargs,
+                                        cond_fn=None,
+                                        device=dist_util.dev(),
+                                        noise_level=args.noise_level,
+                                        encoder_features=encoder_features,
+                                    )
+        end.record()
+        th.cuda.synchronize()
+        th.cuda.current_stream().synchronize()
 
 
-        # print('time for 1000', start.elapsed_time(end))
+        print('time taken:', start.elapsed_time(end))
 
         if args.dataset=='brats':
-        #   viz.image(visualize(sample[0,0, ...]), opts=dict(caption="sampled output0"))
-        #   viz.image(visualize(sample[0,1, ...]), opts=dict(caption="sampled output1"))
-        #   viz.image(visualize(sample[0,2, ...]), opts=dict(caption="sampled output2"))
-        #   viz.image(visualize(sample[0,3, ...]), opts=dict(caption="sampled output3"))
-            difftot=abs(org[0, :4,...]-sample[0, ...]).sum(dim=0)
-        #   viz.heatmap(visualize(difftot), opts=dict(caption="difftot"))
+            pp_dice, pp_auprc, pp_figure = postprocess_evaluate(org, sample, Labelmask)
 
-        # Get the original filename from number
-            original_path = str(number)
-            filename = os.path.basename(original_path)
-            base_name = os.path.splitext(filename)[0]
-            
-            # Check if original file is .nii.gz or .nii
-            is_gz = original_path.endswith('.nii.gz')
-            
-            # Convert sample to numpy and reshape if needed
-            sample_np = sample.cpu().numpy()
-            
-            # Create nifti image with same affine and header as input if available
-            try:
-                original_nifti = nib.load(original_path)
-                affine = original_nifti.affine
-                header = original_nifti.header
-            except:
-                # If original can't be loaded, use identity affine
-                affine = np.eye(4)
-                header = None
-            
-            # Create new nifti image
-            nifti_img = nib.Nifti1Image(sample_np[0], affine, header)
-            
-            # Save with same extension as input
-            if is_gz:
-                output_path = os.path.join(args.output_dir, f"{base_name}_sampled.nii.gz")
-            else:
-                output_path = os.path.join(args.output_dir, f"{base_name}_sampled.nii")
-            
-            nib.save(nifti_img, output_path)
-            logger.log(f"Saved sample to {output_path}")
-          
-        elif args.dataset=='chexpert':
-        #   viz.image(visualize(sample[0, ...]), opts=dict(caption="sampled output"+str(name)))
-          diff=abs(visualize(org[0, 0,...])-visualize(sample[0,0, ...]))
-          diff=np.array(diff.cpu())
-        #   viz.heatmap(np.flipud(diff), opts=dict(caption="diff"))
+            wandb.log({
+                    f"anomaly_map_th_{str(img[4])}": wandb.Image(pp_figure, caption=f"Dice Score{pp_dice:.3f}, {pp_auprc:.3f}"), 
+                })
+            plt.clf()
+            all_numbers.append(number)
+            dice_scores.append(pp_dice)
+            auprc_scores.append(pp_auprc)
+            print(f"Sample: {str(img[4])}, {pp_dice=}, {pp_auprc=}")
 
-
-        # gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
-        # dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
-        # all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
-        # if args.class_cond:
-        #     gathered_labels = [
-        #         th.zeros_like(classes) for _ in range(dist.get_world_size())
-        #     ]
-        #     dist.all_gather(gathered_labels, classes)
-        #     all_labels.extend([labels.cpu().numpy() for labels in gathered_labels])
+        gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
+        dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
+        all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
         
 
         # Simply append samples without gathering
-        all_images.append(sample.cpu().numpy())
-        if args.class_cond:
-            all_labels.append(classes.cpu().numpy())
+        # all_images.append(sample.cpu().numpy())
+        # if args.class_cond:
+        #     all_labels.append(classes.cpu().numpy())
+        
+        print("<<<<<<<<<<<<<<<<<<<<<<Sampling completed>>>>>>>>>>>>>>>>>>>>>>>")
+
+    wandb.log({"mean_dice_score": np.mean(dice_scores), "mean_auroc_score": np.mean(auprc_scores)})
+    print(f"{len(dice_scores)} samples tested, Mean dice score: {np.mean(dice_scores)}, Mean AUPRC: {np.mean(auprc_scores)}")
+    print(dice_scores)
+    print(auprc_scores)
+
+    import pandas as pd
+    results_df = pd.DataFrame({
+        'number': all_numbers,
+        'dice_score': dice_scores,
+        'auprc': auprc_scores
+    })
+    results_df.to_csv(f"./results_{date_time_str}.csv", index=False)
 
     arr = np.concatenate(all_images, axis=0)
     arr = arr[: args.num_samples]
@@ -258,8 +199,9 @@ def main():
         label_arr = label_arr[: args.num_samples]
     
 
-    # dist.barrier()
+    dist.barrier()
     logger.log("sampling complete")
+    wandb.finish()
 
 
 def create_argparser():
@@ -274,14 +216,14 @@ def create_argparser():
         classifier_path="",
         classifier_scale=100,
         noise_level=500,
-        dataset='brats'
+        dataset='brats',
+        classifier_free_guidance_scale=2.0,
     )
     defaults.update(model_and_diffusion_defaults())
-    defaults.update(classifier_defaults())
+    # defaults.update(classifier_defaults())
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     return parser
 
 if __name__ == "__main__":
     main()
-
