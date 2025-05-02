@@ -41,15 +41,21 @@ def postprocess_evaluate(
         reconstructed_image, 
         ground_truth_seg
     ):
-    original_image = original_image.cpu().detach().numpy()
-    reconstructed_image = reconstructed_image.cpu().detach().numpy()
+    original_image = original_image.cpu().detach().numpy().squeeze()
+    reconstructed_image = reconstructed_image.cpu().detach().numpy().squeeze()
 
-    # print("original_image min: ", original_image.min(), "original_image max: ", original_image.max())
-    # print("reconstructed_image min: ", reconstructed_image.min(), "reconstructed_image max: ", reconstructed_image.max())
+    print("original_image (min, max): ", (original_image.min(),original_image.max()))
+    print("reconstructed_image (min, max): ", (reconstructed_image.min(),reconstructed_image.max()))
 
-    ground_truth_seg = ground_truth_seg.cpu().detach().numpy()
+    ground_truth_seg = ground_truth_seg.cpu().detach().numpy().squeeze()
 
     anomaly_map = np.abs(original_image - reconstructed_image)
+
+    # print shapes of all first
+    print("original_image shape: ", original_image.shape)
+    print("reconstructed_image shape: ", reconstructed_image.shape)
+    print("anomaly_map shape: ", anomaly_map.shape)
+    print("ground_truth_seg shape: ", ground_truth_seg.shape)
     anomaly_map_mf = apply_3d_median_filter(anomaly_map, kernelsize=5)
     anomaly_map_mf = anomaly_map_mf.sum(axis=0)
     
@@ -60,7 +66,8 @@ def postprocess_evaluate(
         max_steps=10
     )
 
-    anomaly_thresholded = anomaly_map_mf > bestThresh
+    # anomaly_thresholded = anomaly_map_mf > bestThresh
+    anomaly_thresholded = np.where(anomaly_map_mf > bestThresh, 1, 0)
     anomaly_thresholded_cc = filter_3d_connected_components(anomaly_thresholded)
 
     titles = [
@@ -141,11 +148,15 @@ def find_best_val(x, y, val_range=(0, 1), max_steps=4, step=0, max_val=0, max_po
         return find_best_val(x, y, val_range=(center, top), step=step + 1, max_steps=max_steps,
                              max_val=max_val,max_point=max_point)
 def dice(P, G):
-    psum = np.sum(P.flatten())
-    gsum = np.sum(G.flatten())
-    pgsum = np.sum(np.multiply(P.flatten(), G.flatten()))
-    score = (2 * pgsum) / (psum + gsum)
-    return score
+    # psum = np.sum(P.flatten())
+    # gsum = np.sum(G.flatten())
+    # pgsum = np.sum(np.multiply(P.flatten(), G.flatten()))
+    # score = (2 * pgsum) / (psum + gsum)
+    # return score
+    P = (P > 0).float()
+    G = (G > 0).float()
+    intersection = (P * G).sum()
+    return 2. * intersection / (P.sum() + G.sum())
 
 def filter_3d_connected_components(volume):
     sz = None

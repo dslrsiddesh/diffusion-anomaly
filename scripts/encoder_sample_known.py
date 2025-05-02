@@ -48,7 +48,7 @@ def main():
     print("Device:", device)
 
     encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/diffusion-anomaly/encoder/checkpoint_epoch20.pth", map_location="cpu")
-    base_encoder = AEEncoder(in_channels=4)
+    base_encoder = AEEncoder(in_channels=2)
 
     ema_encoder_model = ModelEmaV3(base_encoder, decay=0.999)
     ema_encoder_model.load_state_dict(encoder_checkpoint['ema_encoder'])
@@ -96,7 +96,7 @@ def main():
 
     def model_fn(x, t, y=None, encoder_features=None):
         if encoder_features is not None:
-            print(f"------ Encoder features received with starting shape: {encoder_features}------")
+            print(f"------ Encoder features received with starting shape: {encoder_features[256].shape}------")
         return model(x, t, y if args.class_cond else None, encoder_features=encoder_features)
 
     logger.log("sampling...")
@@ -110,11 +110,22 @@ def main():
         model_kwargs = {}
         print('img', img[0].shape, img[1])
         if args.dataset=='brats':
-          Labelmask = th.where(img[3] > 0, 1, 0)
-          assert Labelmask.shape[-1] == 256
-          number=img[4][0]
-          if img[2]==0:
-              continue
+            Labelmask = th.where(img[3] > 0, 1, 0)
+            b, c, h, w = Labelmask.shape
+            pad_h = 256 - h
+            pad_w = 256 - w
+            
+            pad_top = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left = pad_w // 2
+            pad_right = pad_w - pad_left
+            
+            Labelmask = F.pad(Labelmask, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
+            print(f"Labelmask: {Labelmask.shape}")
+            assert Labelmask.shape[-1] == 256
+            number=img[4][0]
+            if img[2]==0:
+                continue
         else:
             assert args.dataset=='brats'
 
@@ -130,7 +141,9 @@ def main():
         if ema_encoder is not None:
             print("===== Encoder features extraction in model_fn in encoder_sample_known.py =====")
             with th.no_grad():
-                encoder_features = ema_encoder(img)
+                org_img = img[0].to(dist_util.dev())
+                print("org_img shape sending to encoder: ", org_img.shape)
+                encoder_features = ema_encoder(org_img)
                 print('encoder_feats: ', encoder_features.keys())
         else:
             encoder_features = None
@@ -167,9 +180,9 @@ def main():
             auprc_scores.append(pp_auprc)
             print(f"Sample: {str(img[4])}, {pp_dice=}, {pp_auprc=}")
 
-        gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
-        all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
+        # gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
+        # dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
+        # all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
         
 
         # Simply append samples without gathering

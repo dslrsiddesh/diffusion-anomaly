@@ -567,7 +567,7 @@ class GaussianDiffusion:
         b = shape[0]
 
 
-        t = th.randint(499,500, (b,), device=device).long().to(device)
+        t = th.randint(noise_level-1,noise_level, (b,), device=device).long().to(device)
 
         org=img[0].to(device)
         img=img[0].to(device)

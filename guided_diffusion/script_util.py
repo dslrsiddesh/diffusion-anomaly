@@ -177,6 +177,7 @@ def create_model(
       number_in_channels=2
     else:
       number_in_channels=1
+    print("Channel Multiplier:", channel_mult)
     print('number of input channels:', number_in_channels)
     print("----- the above should be 2 now since we are considering only t2 and flair -----")
       

@@ -798,16 +798,16 @@ class UNetModel(nn.Module):
             
             # Second ResBlock
             h = self.input_blocks[block_idx](h, emb)
-            hs.append(h)
             # print(f"[Level {level}] after ResBlock2 — res={res}, h.shape={tuple(h.shape)}")
             block_idx += 1
 
-            if encoder_features is not None and res != 256:
+            if encoder_features is not None and res != 256 and res != 128:
                 # print("level = ", level)
                 enc_feat = encoder_features[res]
                 # print(f"  enc_feat[{res}].shape = {tuple(enc_feat.shape)}")
                 h = self.cross_attn[str(res)](h, enc_feat)
                 # print(f"  after CrossAttn — h.shape={tuple(h.shape)}")
+            hs.append(h)
             
             # Skip connection for upsampling later
             
@@ -818,21 +818,23 @@ class UNetModel(nn.Module):
             hs.append(h)
             res //= 2
 
-        # 4) middle (bottleneck) with cross-attention at res=8
+        # 4) middle (bottleneck) with-out cross-attention at res=8
+        h = self.middle_block(h, emb)
+
         # print("---- MIDDLE BLOCK ----")
-        h = self.middle_block[0](h, emb)
+        # h = self.middle_block[0](h, emb)
         # print(f" middle after ResBlock1 — h.shape={tuple(h.shape)}")
 
-        if encoder_features is not None:
-            enc_feat = encoder_features[8]  # bottleneck is at resolution 8
+        # if encoder_features is not None:
+        #     enc_feat = encoder_features[8]  # bottleneck is at resolution 8
             # print(f"  enc_feat[8].shape = {tuple(enc_feat.shape)}")
             # Use string "8" as key if that's how you've defined your cross_attn dict
-            h = self.cross_attn["8"](h, enc_feat)
+            # h = self.cross_attn["8"](h, enc_feat)
             # print(f"  after middle CrossAttn — h.shape={tuple(h.shape)}")
 
-        h = self.middle_block[1](h)
+        # h = self.middle_block[1](h)
         # print(f" middle after SelfAttn — h.shape={tuple(h.shape)}")
-        h = self.middle_block[2](h, emb)
+        # h = self.middle_block[2](h, emb)
         # print(f" middle after ResBlock2 — h.shape={tuple(h.shape)}")
 
         # Debug: print all hs shapes before upsampling path
@@ -842,53 +844,12 @@ class UNetModel(nn.Module):
         # 5) upsampling path (unchanged)
         for module in self.output_blocks:
             skip = hs.pop()
-            # print(f"  Upsampling: h.shape={tuple(h.shape)}, skip.shape={tuple(skip.shape)}")
             h = th.cat([h, skip], dim=1)
+            # print(f"h.shape beefore operation={tuple(h.shape)}")
             h = module(h, emb)
+            # print(f"h.shape after operation={tuple(h.shape)}")
 
         return self.out(h)
-    
-    # def forward(self, x, timesteps, y=None, encoder_features=None):
-    #     """
-    #     Apply the model to an input batch.
-
-    #     :param x: an [N x C x ...] Tensor of inputs.
-    #     :param timesteps: a 1-D batch of timesteps.
-    #     :param y: an [N] Tensor of labels, if class-conditional.
-    #     :return: an [N x C x ...] Tensor of outputs.
-    #     """
-    #     print("---------------------------UNetModel forward method called---------------------------")
-    #     if encoder_features is not None:
-    #         print("------ Received encoder features in UNetModel forward------")
-
-    #     assert (y is not None) == (
-    #         self.num_classes is not None
-    #     ), "must specify y if and only if the model is class-conditional"
-
-    #     hs = []
-    #     emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
-
-    #     if self.num_classes is not None:
-    #         assert y.shape == (x.shape[0],)
-    #         emb = emb + self.label_emb(y)
-
-    #     h = x.type(self.dtype)
-    #     for module in self.input_blocks:
-    #         print("module = ", type(module))
-    #         print("h.shape = ", h.shape)
-    #         h = module(h, emb)
-    #         hs.append(h)
-    #     h = self.middle_block(h, emb)
-
-    #     for i in hs:
-    #         print(f"  hs[i].shape = {tuple(i.shape)}")
-    #     for module in self.output_blocks:
-    #         h = th.cat([h, hs.pop()], dim=1)
-    #         h = module(h, emb)
-    #     h = h.type(x.dtype)
-    #     return self.out(h)
-
-
 
 class SuperResModel(UNetModel):
     """
