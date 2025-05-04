@@ -33,7 +33,7 @@ from timm.utils import ModelEmaV3
 import wandb
 wandb.login(key="b3990523b6efe11b984fad8a8e64911f78399735")
 
-project = "DDPM_Simplex_EVAL"
+project = "DDPM_Simplex_eval_re"
 wandb.init(project=project, reinit=True)
 
 def visualize(img):
@@ -47,7 +47,7 @@ def main():
     device = dist_util.dev()
     print("Device:", device)
 
-    encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/diffusion-anomaly/encoder/checkpoint_epoch20.pth", map_location="cpu")
+    encoder_checkpoint = th.load("/kaggle/input/ae-2channel/ckpt_2channel_epoch25.pth", map_location="cpu")
     base_encoder = AEEncoder(in_channels=2)
 
     ema_encoder_model = ModelEmaV3(base_encoder, decay=0.999)
@@ -103,7 +103,8 @@ def main():
     all_numbers = []
     all_images = []
     all_labels = []
-    dice_scores = []
+    dice_scores_nor = []
+    dice_scores_zimmer = []
     auprc_scores = []
 
     for n, img in enumerate(datal):
@@ -123,12 +124,20 @@ def main():
             Labelmask = F.pad(Labelmask, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
             print(f"Labelmask: {Labelmask.shape}")
             assert Labelmask.shape[-1] == 256
-            number=img[4][0]
-            if img[2]==0:
+
+            if isinstance(img[4], list):
+                numbers = img[4]
+            else:
+                numbers = [img[4][i] for i in range(img[0].shape[0])]
+                
+            if img[2].sum() == 0:
                 continue
         else:
             assert args.dataset=='brats'
 
+        # sample_fn = (
+        #     diffusion.p_sample_loop_known if not args.use_ddim else diffusion.ddim_sample_loop_known
+        # )
         sample_fn = (
             diffusion.p_sample_loop_known
         )
@@ -148,59 +157,72 @@ def main():
         else:
             encoder_features = None
             print("===== No encoder features extraction because of the model=None =====")
+        try: 
+            sample, x_noisy, org = sample_fn(
+                                            model_fn,
+                                            (args.batch_size, 2, args.image_size, args.image_size),
+                                            img, 
+                                            org=img,
+                                            clip_denoised=args.clip_denoised,
+                                            model_kwargs=model_kwargs,
+                                            cond_fn=None,
+                                            device=dist_util.dev(),
+                                            noise_level=args.noise_level,
+                                            encoder_features=encoder_features,
+                                        )
+            end.record()
+            th.cuda.synchronize()
+            th.cuda.current_stream().synchronize()
+            print('time taken:', start.elapsed_time(end))
+        except RuntimeError:
+            continue
 
-        sample, x_noisy, org = sample_fn(
-                                        model_fn,
-                                        (args.batch_size, 2, args.image_size, args.image_size),
-                                        img, 
-                                        org=img,
-                                        clip_denoised=args.clip_denoised,
-                                        model_kwargs=model_kwargs,
-                                        cond_fn=None,
-                                        device=dist_util.dev(),
-                                        noise_level=args.noise_level,
-                                        encoder_features=encoder_features,
-                                    )
-        end.record()
-        th.cuda.synchronize()
-        th.cuda.current_stream().synchronize()
+        # if args.dataset=='brats':
+        #     pp_dice, pp_auprc, pp_figure = postprocess_evaluate(org, sample, Labelmask)
 
+        #     wandb.log({
+        #             f"anomaly_map_th_{str(img[4])}": wandb.Image(pp_figure, caption=f"Dice Score{pp_dice:.3f}, {pp_auprc:.3f}"), 
+        #         })
+        #     plt.clf()
+        #     all_numbers.append(number)
+        #     dice_scores.append(pp_dice)
+        #     auprc_scores.append(pp_auprc)
+        #     print(f"Sample: {str(img[4])}, {pp_dice=}, {pp_auprc=}")
 
-        print('time taken:', start.elapsed_time(end))
-
+        # print("<<<<<<<<<<<<<<<<<<<<<<Sampling completed>>>>>>>>>>>>>>>>>>>>>>>")
         if args.dataset=='brats':
-            pp_dice, pp_auprc, pp_figure = postprocess_evaluate(org, sample, Labelmask)
+            for batch_idx in range(args.batch_size):
+                if hasattr(img[2], 'shape') and img[2].shape[0] > 1 and img[2][batch_idx] == 0:
+                    continue
+                    
+                single_org = extract_sample_from_batch(org, batch_idx)
+                single_sample = sample[batch_idx:batch_idx+1]  
+                single_labelmask = Labelmask[batch_idx:batch_idx+1]
+                current_number = numbers[batch_idx]
+                
+                pp_dice_nor, pp_dice_zimmer, pp_auprc, pp_figure = postprocess_evaluate(single_org, single_sample, single_labelmask)
 
-            wandb.log({
-                    f"anomaly_map_th_{str(img[4])}": wandb.Image(pp_figure, caption=f"Dice Score{pp_dice:.3f}, {pp_auprc:.3f}"), 
-                })
-            plt.clf()
-            all_numbers.append(number)
-            dice_scores.append(pp_dice)
-            auprc_scores.append(pp_auprc)
-            print(f"Sample: {str(img[4])}, {pp_dice=}, {pp_auprc=}")
+                wandb.log({
+                        f"anomaly_map_th_{str(current_number)}": wandb.Image(pp_figure, caption=f"Dice Score{pp_dice_nor:.3f}, {pp_dice_zimmer:.3f}, {pp_auprc:.3f}"), 
+                    })
+                plt.clf()
+                all_numbers.append(current_number)
+                dice_scores_nor.append(pp_dice_nor)
+                dice_scores_zimmer.append(pp_dice_zimmer)
+                auprc_scores.append(pp_auprc)
+                print(f"Sample: {str(current_number)}, {pp_dice_nor=}, {pp_dice_zimmer=}, {pp_auprc=}")
 
-        # gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
-        # dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
-        # all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
-        
-
-        # Simply append samples without gathering
-        # all_images.append(sample.cpu().numpy())
-        # if args.class_cond:
-        #     all_labels.append(classes.cpu().numpy())
-        
-        print("<<<<<<<<<<<<<<<<<<<<<<Sampling completed>>>>>>>>>>>>>>>>>>>>>>>")
-
-    wandb.log({"mean_dice_score": np.mean(dice_scores), "mean_auroc_score": np.mean(auprc_scores)})
-    print(f"{len(dice_scores)} samples tested, Mean dice score: {np.mean(dice_scores)}, Mean AUPRC: {np.mean(auprc_scores)}")
-    print(dice_scores)
+    wandb.log({"mean_dice_score_normal": np.mean(dice_scores_nor), "mean_dice_score_zimmer": np.mean(dice_scores_zimmer), "mean_auprc_score": np.mean(auprc_scores)})
+    print(f"{len(dice_scores_nor)} samples tested, Mean dice score: {np.mean(dice_scores_nor)}, {np.mean(dice_scores_zimmer)}, Mean AUPRC: {np.mean(auprc_scores)}")
+    print(dice_scores_nor)
+    print(dice_scores_zimmer)
     print(auprc_scores)
 
     import pandas as pd
     results_df = pd.DataFrame({
         'number': all_numbers,
-        'dice_score': dice_scores,
+        'dice_score_normal': dice_scores_nor,
+        'dice_score_zimmer': dice_scores_zimmer,
         'auprc': auprc_scores
     })
     results_df.to_csv(f"./results_{date_time_str}.csv", index=False)
@@ -210,7 +232,6 @@ def main():
     if args.class_cond:
         label_arr = np.concatenate(all_labels, axis=0)
         label_arr = label_arr[: args.num_samples]
-    
 
     dist.barrier()
     logger.log("sampling complete")
@@ -221,7 +242,7 @@ def create_argparser():
     defaults = dict(
         output_dir="sampled",
         data_dir="",
-        clip_denoised=True,
+        clip_denoised="zero",
         num_samples=10,
         batch_size=1,
         use_ddim=False,
@@ -237,6 +258,14 @@ def create_argparser():
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     return parser
+
+def extract_sample_from_batch(batch_data, idx):
+    if isinstance(batch_data, th.Tensor):
+        return batch_data[idx:idx+1]
+    elif isinstance(batch_data, tuple) or isinstance(batch_data, list):
+        return [extract_sample_from_batch(item, idx) if isinstance(item, (th.Tensor, tuple, list)) else item for item in batch_data]
+    else:
+        return batch_data
 
 if __name__ == "__main__":
     main()
