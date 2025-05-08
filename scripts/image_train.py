@@ -23,9 +23,11 @@ from guided_diffusion.encoder import AEEncoder
 from timm.utils import ModelEmaV3
 
 def main():
+    args = create_argparser().parse_args()
+    
     print("---------------------------In Main in image_train.py---------------------------")
 
-    encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/encoder/checkpoint_epoch20.pth", map_location="cpu")
+    encoder_checkpoint = th.load(args.encoder_path, map_location=dist_util.dev())
     base_encoder = AEEncoder(in_channels=2)
 
     # if ema model, load like this
@@ -44,7 +46,6 @@ def main():
     # ema_encoder.eval()
     print("---------------------------ema_encoder loaded and set to eval mode---------------------------")
 
-    args = create_argparser().parse_args()
 
     dist_util.setup_dist()
     logger.configure()
@@ -113,6 +114,7 @@ def create_argparser():
         use_fp16=False,
         fp16_scale_growth=1e-3,
         dataset='brats',
+        encoder_path="ckpts/ae_ckpt_2channel_epoch25.pth"
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

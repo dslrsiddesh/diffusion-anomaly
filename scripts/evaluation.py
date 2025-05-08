@@ -153,8 +153,8 @@ def dice(P, G):
     # pgsum = np.sum(np.multiply(P.flatten(), G.flatten()))
     # score = (2 * pgsum) / (psum + gsum)
     # return score
-    P = (P > 0).float()
-    G = (G > 0).float()
+    P = (P > 0).astype(float)
+    G = (G > 0).astype(float)
     intersection = (P * G).sum()
     return 2. * intersection / (P.sum() + G.sum())
 

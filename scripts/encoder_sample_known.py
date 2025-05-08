@@ -31,10 +31,8 @@ from scripts.evaluation import postprocess_evaluate
 from guided_diffusion.encoder import AEEncoder
 from timm.utils import ModelEmaV3
 import wandb
-wandb.login(key="b3990523b6efe11b984fad8a8e64911f78399735")
-
-project = "DDPM_Simplex_EVAL"
-wandb.init(project=project, reinit=True)
+project = "DDPM_Simplex_EVAL21"
+wandb.init(project=project)
 
 def visualize(img):
     _min = img.min()
@@ -43,11 +41,14 @@ def visualize(img):
     return normalized_img
 
 def main():
+    args = create_argparser().parse_args()
+
+
     print('------------------------ in main ------------------------')
     device = dist_util.dev()
     print("Device:", device)
 
-    encoder_checkpoint = th.load("/Users/siddesh/Desktop/fresh/diffusion-anomaly/encoder/checkpoint_epoch20.pth", map_location="cpu")
+    encoder_checkpoint = th.load(args.encoder_path, map_location=dist_util.dev())
     base_encoder = AEEncoder(in_channels=2)
 
     ema_encoder_model = ModelEmaV3(base_encoder, decay=0.999)
@@ -58,7 +59,7 @@ def main():
     ema_encoder.eval()
     print("---------------------------ema_encoder loaded and set to eval mode---------------------------")
 
-    args = create_argparser().parse_args()
+    
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -124,7 +125,7 @@ def main():
             print(f"Labelmask: {Labelmask.shape}")
             assert Labelmask.shape[-1] == 256
             number=img[4][0]
-            if img[2]==0:
+            if img[2]==0: #consider only unhealthy
                 continue
         else:
             assert args.dataset=='brats'
@@ -151,7 +152,7 @@ def main():
 
         sample, x_noisy, org = sample_fn(
                                         model_fn,
-                                        (args.batch_size, 2, args.image_size, args.image_size),
+                                        (args.batch_size, 2, args.image_size, args.image_size), # shape
                                         img, 
                                         org=img,
                                         clip_denoised=args.clip_denoised,
@@ -168,11 +169,14 @@ def main():
 
         print('time taken:', start.elapsed_time(end))
 
+        print(f"{sample.shape=}")
+        print(f"{org.shape=}")
+
         if args.dataset=='brats':
             pp_dice, pp_auprc, pp_figure = postprocess_evaluate(org, sample, Labelmask)
 
             wandb.log({
-                    f"anomaly_map_th_{str(img[4])}": wandb.Image(pp_figure, caption=f"Dice Score{pp_dice:.3f}, {pp_auprc:.3f}"), 
+                    f"anomaly_map_th_{str(img[4])}": wandb.Image(pp_figure, caption=f"Dice Score:{pp_dice:.3f}, AUCROC:{pp_auprc:.3f}"), 
                 })
             plt.clf()
             all_numbers.append(number)
@@ -203,7 +207,7 @@ def main():
         'dice_score': dice_scores,
         'auprc': auprc_scores
     })
-    results_df.to_csv(f"./results_{date_time_str}.csv", index=False)
+    results_df.to_csv(f"./results_{args.noise_level}.csv", index=False)
 
     arr = np.concatenate(all_images, axis=0)
     arr = arr[: args.num_samples]
@@ -220,17 +224,17 @@ def main():
 def create_argparser():
     defaults = dict(
         output_dir="sampled",
-        data_dir="",
+        data_dir="testing",
         clip_denoised=True,
         num_samples=10,
         batch_size=1,
         use_ddim=False,
-        model_path="",
+        model_path="/results/brats2update050000.pt",
         classifier_path="",
         classifier_scale=100,
         noise_level=500,
         dataset='brats',
-        classifier_free_guidance_scale=2.0,
+        encoder_path="ckpts/ae_ckpt_2channel_epoch25.pth"
     )
     defaults.update(model_and_diffusion_defaults())
     # defaults.update(classifier_defaults())
