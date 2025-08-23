@@ -2,28 +2,19 @@ import torch as th
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
+from torchvision import transforms, datasets
 from guided_diffusion.unet import ResBlock, AttentionBlock, Downsample, Upsample, conv_nd, normalization
 import os
+from guided_diffusion.bratsloader import BRATSDataset
 from tqdm import tqdm
 from timm.utils import ModelEmaV3
 import wandb
-import torch.nn.functional as F
-import lpips
 
 import torch
 import os.path
 import nibabel
 
-wandb.login(key="b3990523b6efe11b984fad8a8e64911f78399735")
-
-def init_weights(m):
-    if isinstance(m, (nn.Conv2d, nn.Linear)):
-        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-        if m.bias is not None:
-            nn.init.constant_(m.bias, 0)
-    elif isinstance(m, nn.BatchNorm2d):
-        nn.init.constant_(m.weight, 1)
-        nn.init.constant_(m.bias, 0)
+wandb.login(key="INSERT_YOUR_KEY_HERE")
 
 class BRATSDataset(torch.utils.data.Dataset):
     def __init__(self, directory, test_flag=False):
@@ -59,7 +50,7 @@ class BRATSDataset(torch.utils.data.Dataset):
                         continue
                     seqtype = f.split('_')[3]
                     datapoint[seqtype] = os.path.join(root, f)
-                assert set(datapoint.keys()) == self.seqtypes_set, \
+                assert set(['t2', 'flair', 'seg']) == self.seqtypes_set, \
                     f'datapoint is incomplete, keys are {datapoint.keys()}'
                 self.database.append(datapoint)
 
@@ -81,7 +72,7 @@ class BRATSDataset(torch.utils.data.Dataset):
 
             seg=nibabel.load(path2)
             seg=seg.get_fdata()
-            image = torch.zeros(4, 256, 256)
+            image = torch.zeros(2, 256, 256)
             image[:, 8:-8, 8:-8] = out
             label = seg[None, ...]
             if seg.max() > 0:
@@ -90,7 +81,7 @@ class BRATSDataset(torch.utils.data.Dataset):
                 weak_label = 0
             out_dict["y"]=weak_label
         else:
-            image = torch.zeros(4,256,256)
+            image = torch.zeros(2,256,256)
             image[:,8:-8,8:-8]=out[:-1,...]		#pad to a size of (256,256)
             label = out[-1, ...][None, ...]
             if label.max()>0:
@@ -103,30 +94,12 @@ class BRATSDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.database)
-
-
-class CombinedLoss(nn.Module):
-    def __init__(self, lpips_weight=0.1, mse_weight=1, net='alex', device='cuda'):
-        super().__init__()
-        self.lpips_weight = lpips_weight
-        self.mse_weight = mse_weight
-        self.lpips_model = lpips.LPIPS(net=net, normalize=True).to(device)
-        self.device = device
     
-    def forward(self, output, target):
-        mse_loss = F.mse_loss(output, target)
-        
-        lpips_loss = self.lpips_model(output, target).mean()
-        
-        # Combined loss
-        total_loss = self.mse_weight * mse_loss + self.lpips_weight * lpips_loss
-        
-        return total_loss, {'mse': mse_loss.item(), 'lpips': lpips_loss.item()}
-    
+
 class AEEncoder(nn.Module):
     def __init__(
         self,
-        in_channels: int = 1,
+        in_channels: int = 2,
         model_channels: int = 128,
         channel_mult: tuple = (1, 1, 2, 2, 4, 4),
         num_res_blocks: int = 2,
@@ -189,6 +162,7 @@ class AEEncoder(nn.Module):
         ])
         
     def forward(self, x):
+        print(f"Input shape: {x.shape}")
         features = {}
         # print(f"Input shape: {x.shape}")
         
@@ -229,7 +203,7 @@ class AEEncoder(nn.Module):
             
         return features
 class Decoder(nn.Module):
-    def __init__(self, base_channels=128, out_channels=4):
+    def __init__(self, base_channels=128, out_channels=2):
         super().__init__()
         self.base_channels = base_channels
         
@@ -275,7 +249,7 @@ class Decoder(nn.Module):
         emb = self.dummy_emb.expand(features["bn"].shape[0], -1)
         
         # Start with bottleneck features only
-        x = features["bn"]  # Shape should be [batch, base_channels*4, 8, 8]
+        x = features[8]  # Shape should be [batch, base_channels*4, 8, 8]
         
         # Upsample to 16x16
         x = self.up1(x)  # Shape becomes [batch, base_channels*4, 16, 16]
@@ -299,6 +273,8 @@ class Decoder(nn.Module):
         
         # Final convolution
         x = self.final(x)  # Shape becomes [batch, out_channels, 256, 256]
+
+        print(f"Final output shape for this batch: {x.shape}")
         
         return x
         
@@ -330,13 +306,11 @@ def train_autoencoder(
     epochs=200, 
     save_path="checkpoints/", 
     eval_freq=1,
-    save_freq=5, 
-    batch_size=8,
-    lr=5e-5,
-    ema_decay=0.9995,
-    patience = 15,
-    lpips_weight=0.1,
-    mse_weight=1
+    save_freq=10, 
+    batch_size=16,
+    lr=1e-4,
+    ema_decay=0.999,
+    patience = 5
 ):
     # Initialize wandb for logging
     wandb.init(project="improved_ae_training", config={
@@ -346,9 +320,7 @@ def train_autoencoder(
         "ema_decay": ema_decay,
         "architecture": "BrainAutoencoder",
         "optimizer": "Adam",
-        "scheduler": "ReduceLROnPlateau",
-        "lpips_weight": lpips_weight,
-        "mse_weight": mse_weight,
+        "scheduler": "ReduceLROnPlateau"
     })
 
     os.makedirs(save_path, exist_ok=True)
@@ -356,10 +328,7 @@ def train_autoencoder(
     os.makedirs(recon_path, exist_ok=True)
 
     encoder = AEEncoder(in_channels=2).to(device)
-    decoder = Decoder().to(device)
-
-    encoder.apply(init_weights)
-    decoder.apply(init_weights)
+    decoder = Decoder(out_channels=2).to(device)
 
     ema_encoder = ModelEmaV3(encoder, decay=ema_decay, device=device)
     ema_decoder = ModelEmaV3(decoder, decay=ema_decay, device=device)
@@ -368,9 +337,7 @@ def train_autoencoder(
     # Changed to ReduceLROnPlateau like the reference code
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, 
                                                    patience=5, verbose=True)
-    
-    # criterion = nn.MSELoss()
-    criterion = CombinedLoss(lpips_weight=lpips_weight, mse_weight=mse_weight, device=device)
+    criterion = nn.MSELoss()
 
     # Load Dataset (keeping your existing dataset)
     dataset = BRATSDataset("/home/cs23m1009/Siddesh/healthy", test_flag=False)
@@ -436,17 +403,14 @@ def train_autoencoder(
             # Forward pass
             features = encoder(x)
             x_recon = decoder(features)
-
-            loss, loss_components = criterion(x_recon, x)
+            loss = criterion(x_recon, x)
 
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
-
-            # Gradient clipping
             th.nn.utils.clip_grad_norm_(
                 list(encoder.parameters()) + list(decoder.parameters()), 
-                max_norm=0.5
+                max_norm=1.0
             )
             optimizer.step()
 
@@ -468,8 +432,6 @@ def train_autoencoder(
             if batch_idx % 10 == 0:
                 wandb.log({
                     "train_loss_step": loss.item(),
-                    "train_mse_step": loss_components['mse'],
-                    "train_lpips_step": loss_components['lpips'],
                     "epoch": epoch,
                     "batch": batch_idx,
                     "learning_rate": optimizer.param_groups[0]['lr']
@@ -566,86 +528,12 @@ if __name__ == "__main__":
 
     train_autoencoder(
         device=DEVICE,
-        epochs=2,
+        epochs=200,
         save_path="sid_checkpoints/",
         eval_freq=1,    # eval after num epochs
         save_freq=5,    # save ckpt after num epochs
         batch_size=12,
-        lr=5e-5,
-        ema_decay=0.9995,
-        patience = 15,
-        lpips_weight=0.1,
-        mse_weight=1
+        lr=1e-4,
+        ema_decay=0.999,
+        patience = 15
     )
-
-
-# # Load ckpt ###############
-#     def plot_unhealthy_reconstruction(images, recons, epoch, recon_path, batch_idx):
-#         print(images.max(), images.min())
-#         # with torch.no_grad():
-#         #     images = batch.to(device)
-#         #     recons = ae_model(images)
-#         # images = images.cpu()
-#         # recon = recon.cpu()
-#         n = images.shape[0]
-
-#         fig, axes = plt.subplots(2, n, figsize=(n*3, 6))
-#         for i in range(n):
-#             # Original
-#             axes[0, i].imshow(images[i].mean(axis=0), cmap='gray')  # or 'gray'
-#             axes[0, i].set_title("Original")
-#             axes[0, i].axis('off')
-#             # Reconstruction
-#             axes[1, i].imshow(recons[i].mean(axis=0) , cmap='gray')  # or 'gray'
-#             axes[1, i].set_title("Reconstruction")
-#             axes[1, i].axis('off')
-#         plt.tight_layout()
-        
-#         plt.savefig(f"{recon_path}/reconstruction_e{epoch}_{batch_idx}.png", bbox_inches='tight')  # Save as PNG
-#         # wandb.log({f"reconstruction_e{epoch}": wandb.Image(plt)})
-#         plt.close()
-
-#     dataset = BRATSDataset("/home/cs23m1009/projects/diff-anomaly/OUTPUTS/data/testing21", test_flag=False)  # /home/cs23m1009/Siddesh/healthy
-#     val_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
-#     checkpoint = th.load(f"/home/cs23m1009/projects/diff-anomaly/sid_checkpoints2/checkpoint_epoch20.pth")
-
-#     encoder.load_state_dict(checkpoint["encoder"])
-#     decoder.load_state_dict(checkpoint["decoder"])
-#     ema_encoder.load_state_dict(checkpoint["ema_encoder"])
-#     ema_decoder.load_state_dict(checkpoint["ema_decoder"])
-#     epoch = checkpoint["epoch"]
-#     val_loss = checkpoint["val_loss"]
-
-#     encoder.eval()
-#     decoder.eval()
-#     val_loss, ema_val_loss = 0.0, 0.0
-
-#     with th.no_grad():
-#         for batch_idx, batch in enumerate(tqdm(val_loader, desc=f"[Validation]", leave=False)):
-#             print(batch[0].shape)
-#             x = batch[0].to(device)
-
-#             # Normal
-#             recon = decoder(encoder(x))
-#             val_loss += criterion(recon, x).item()
-
-#             # EMA
-#             recon_ema = ema_decoder.module(ema_encoder.module(x))
-#             ema_val_loss += criterion(recon_ema, x).item()
-#             plot_unhealthy_reconstruction(x.cpu(), recon.cpu(), '20', recon_path, batch_idx)
-
-#     avg_val_loss = val_loss / len(val_loader)
-#     avg_ema_val_loss = ema_val_loss / len(val_loader)
-
-#     # # Log validation metrics to wandb
-#     # wandb.log({
-#     #     "val_loss": avg_val_loss,
-#     #     "ema_val_loss": avg_ema_val_loss,
-#     #     "epoch": epoch
-#     # })
-
-#     print(f"[Unhealthy] Val Loss: {avg_val_loss:.4f} | EMA Val: {avg_ema_val_loss:.4f}")
-
-#     # #########
-#     return
