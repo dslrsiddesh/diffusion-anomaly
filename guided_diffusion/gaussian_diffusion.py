@@ -322,7 +322,9 @@ class GaussianDiffusion:
         def process_xstart(x):
             if denoised_fn is not None:
                 x = denoised_fn(x)
-            if clip_denoised:
+            if clip_denoised == "zero":
+                x = x.clamp(0, 1)
+            elif clip_denoised == "minus_one":
                 return x.clamp(-1, 1)
             return x
 
@@ -530,7 +532,7 @@ class GaussianDiffusion:
             encoder_features=encoder_features,
             model_kwargs=model_kwargs,
         )
-        noise = th.randn_like(x[:, :2, ...])
+        noise = self.noise_fn(x, t).float().to(x.device)
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
@@ -572,7 +574,7 @@ class GaussianDiffusion:
         org=img[0].to(device)
         img=img[0].to(device)
         print(f"Received img shape: {img.shape}")
-        indices = list(range(t))[::-1]
+        # indices = list(range(t))[::-1]
         # noise = th.randn_like(img[:, :4, ...]).to(device)
         noise = self.noise_fn(img, t)
         x_noisy = self.q_sample(x_start=img, t=t, noise=noise).to(device)
@@ -620,7 +622,8 @@ class GaussianDiffusion:
         t = th.randint(299,300, (b,), device=device).long().to(device)
         img1=torch.tensor(img1).to(device)
         img2 = torch.tensor(img2).to(device)
-        noise = th.randn_like(img1).to(device)
+        # noise = th.randn_like(img1).to(device)
+        noise = self.noise_fn(img1, t)
         x_noisy1 = self.q_sample(x_start=img1, t=t, noise=noise).to(device)
         x_noisy2 = self.q_sample(x_start=img2, t=t, noise=noise).to(device)
         interpol=lambdaint*x_noisy1+(1-lambdaint)*x_noisy2
@@ -721,6 +724,7 @@ class GaussianDiffusion:
             cond_fn=None,
             model_kwargs=None,
             eta=0.0,
+            encoder_features=None
     ):
         print("--------------------- in ddim_sample ---------------------")
         """
@@ -734,6 +738,7 @@ class GaussianDiffusion:
             t,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
+            encoder_features=encoder_features,
             model_kwargs=model_kwargs,
         )
 
@@ -751,7 +756,7 @@ class GaussianDiffusion:
                 * th.sqrt(1 - alpha_bar / alpha_bar_prev)
         )
         # Equation 12.
-        noise = th.randn_like(x)
+        noise = self.noise_fn(x, t).float().to(x.device)
         mean_pred = (
                 out["pred_xstart"] * th.sqrt(alpha_bar_prev)
                 + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
@@ -773,6 +778,7 @@ class GaussianDiffusion:
         denoised_fn=None,
         model_kwargs=None,
         eta=0.0,
+        encoder_features=None,
     ):  
         print("--------------------- in ddim_reverse_sample ---------------------")
         """
@@ -785,6 +791,7 @@ class GaussianDiffusion:
             t,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
+            encoder_features=encoder_features,
             model_kwargs=model_kwargs,
         )
         # Usually our model outputs epsilon, but we re-derive it
@@ -827,7 +834,8 @@ class GaussianDiffusion:
         t = th.randint(199,200, (b,), device=device).long().to(device)
         img1=torch.tensor(img1).to(device)
         img2 = torch.tensor(img2).to(device)
-        noise = th.randn_like(img1).to(device)
+        # noise = th.randn_like(img1).to(device)
+        noise = self.noise_fn(img1, t)
         x_noisy1 = self.q_sample(x_start=img1, t=t, noise=noise).to(device)
         x_noisy2 = self.q_sample(x_start=img2, t=t, noise=noise).to(device)
         interpol=lambdaint*x_noisy1+(1-lambdaint)*x_noisy2
@@ -908,7 +916,8 @@ class GaussianDiffusion:
             conditioning=False,
             conditioner=None,
             classifier=None,
-            eta = 0.0
+            eta = 0.0,
+            encoder_features=None
     ):
         print("--------------------- in ddim_sample_loop_known ---------------------")
         if device is None:
@@ -921,9 +930,9 @@ class GaussianDiffusion:
         
         indices = list(range(t))[::-1]
         # noise = th.randn_like(img).to(device)
-        noise = self.noise_fn(img, t).float()
+        noise = self.noise_fn(img, t).float().to(device)
         x_noisy = self.q_sample(x_start=img, t=t, noise=noise).to(device)
-        print('xnoisy', x_noisy.shape)
+        print('xnoisy shape:', x_noisy.shape)
 
         final = None
         for sample in self.ddim_sample_loop_progressive(
@@ -933,11 +942,12 @@ class GaussianDiffusion:
             noise=x_noisy,
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
-            cond_fn=cond_fn,
+            cond_fn=None,
             model_kwargs=model_kwargs,
             device=device,
             progress=progress,
             eta=eta,
+            encoder_features=encoder_features
         ):
             final = sample
         # viz.image(visualize(final["sample"].cpu()[0,0, ...]), opts=dict(caption="final 0" ))
@@ -962,6 +972,7 @@ class GaussianDiffusion:
         device=None,
         progress=False,
         eta=0.0,
+        encoder_features=None
     ):
         print("--------------------- in ddim_sample_loop_progressive ---------------------")
         """
@@ -989,8 +1000,8 @@ class GaussianDiffusion:
         for i in indices:
 
             k=abs(time-1-i)
-            if k%20==0:
-                print('k',k)
+            if k%10==0:
+                print('kkkkkkk:',k)
 
             t = th.tensor([k] * shape[0], device=device)
             with th.no_grad():
@@ -1001,6 +1012,7 @@ class GaussianDiffusion:
                     t,
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
+                    encoder_features=encoder_features,
                     model_kwargs=model_kwargs,
                     eta=eta,
                 )
@@ -1019,6 +1031,7 @@ class GaussianDiffusion:
                     clip_denoised=clip_denoised,
                     denoised_fn=denoised_fn,
                     cond_fn=cond_fn,
+                    encoder_features=encoder_features,
                     model_kwargs=model_kwargs,
                     eta=eta,
                  )

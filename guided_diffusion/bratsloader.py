@@ -40,6 +40,7 @@ class BRATSDataset(torch.utils.data.Dataset):
                         continue
                     seqtype = f.split('_')[3]
                     datapoint[seqtype] = os.path.join(root, f)
+                    
                 assert set(self.seqtypes) == self.seqtypes_set, \
                     f'datapoint is incomplete, keys are {datapoint.keys()}'
                 self.database.append(datapoint)

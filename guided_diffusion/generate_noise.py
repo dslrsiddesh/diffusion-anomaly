@@ -7,12 +7,69 @@ from torch.nn import functional as F
 import numpy as np
 
 # this comes from the AnoDDPM paper / repository
+# def generate_simplex_noise(
+#         Simplex_instance, x, t, random_param=False, octave=6, persistence=0.8, frequency=64,
+#         in_channels=2
+#         ):
+#     print(f"SIMPLEX NOISE generating..... [shape = {x.shape}, in_channels = {in_channels}]")
+#     print(t)
+#     noise = torch.empty(x.shape).to(x.device)
+#     for i in range(in_channels):
+#         Simplex_instance.newSeed()
+#         if random_param:
+#             param = random.choice(
+#                     [(2, 0.6, 16), (6, 0.6, 32), (7, 0.7, 32), (10, 0.8, 64), (5, 0.8, 16), (4, 0.6, 16), (1, 0.6, 64),
+#                      (7, 0.8, 128), (6, 0.9, 64), (2, 0.85, 128), (2, 0.85, 64), (2, 0.85, 32), (2, 0.85, 16),
+#                      (2, 0.85, 8),
+#                      (2, 0.85, 4), (2, 0.85, 2), (1, 0.85, 128), (1, 0.85, 64), (1, 0.85, 32), (1, 0.85, 16),
+#                      (1, 0.85, 8),
+#                      (1, 0.85, 4), (1, 0.85, 2), ]
+#                     )
+#             # 2D octaves seem to introduce directional artifacts in the top left
+#             noise[:, i, ...] = torch.unsqueeze(
+#                     torch.from_numpy(
+#                             # Simplex_instance.rand_2d_octaves(
+#                             #         x.shape[-2:], param[0], param[1],
+#                             #         param[2]
+#                             #         )
+#                             Simplex_instance.rand_3d_fixed_T_octaves(
+#                                     x.shape[-2:], t.detach().cpu().numpy(), param[0], param[1],
+#                                     param[2]
+#                                     )
+#                             ).to(x.device), 0
+#                     ).repeat(x.shape[0], 1, 1, 1)
+#         noise[:, i, ...] = torch.unsqueeze(
+#                 torch.from_numpy(
+#                         # Simplex_instance.rand_2d_octaves(
+#                         #         x.shape[-2:], octave,
+#                         #         persistence, frequency
+#                         #         )
+#                         Simplex_instance.rand_3d_fixed_T_octaves(
+#                                 x.shape[-2:], t.detach().cpu().numpy(), octave,
+#                                 persistence, frequency
+#                                 )
+#                         ).to(x.device), 0
+#                 ).repeat(x.shape[0], 1, 1, 1)
+#     return noise
+
 def generate_simplex_noise(
-        Simplex_instance, x, t, random_param=False, octave=6, persistence=0.8, frequency=64,
+        Simplex_instance, x, t,
+        random_param=False, octave=6,
+        persistence=0.8, frequency=64,
         in_channels=2
-        ):
+    ):
+    """
+    Generate fractal (Simplex) noise per-sample, using each t[j] individually.
+    """
+    B, C, H, W = x.shape
+    device = x.device
+
     print(f"SIMPLEX NOISE generating..... [shape = {x.shape}, in_channels = {in_channels}]")
-    noise = torch.empty(x.shape).to(x.device)
+    print(f"timesteps t: {t}")
+
+    # allocate output noise of same shape as x
+    noise = torch.empty_like(x)
+
     for i in range(in_channels):
         Simplex_instance.newSeed()
         if random_param:
@@ -53,6 +110,7 @@ def generate_simplex_noise(
             Simplex_instance.rand_2d_octaves(
                 x.shape[-2:], octave, persistence, frequency)).to(x.device).unsqueeze(0).repeat(x.shape[0], 1, 1)  # Shape becomes [4, 256, 256]
     return noise
+
 
 
 class Simplex_CLASS:

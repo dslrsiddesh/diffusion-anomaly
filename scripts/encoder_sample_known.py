@@ -31,6 +31,7 @@ from scripts.evaluation import postprocess_evaluate
 from guided_diffusion.encoder import AEEncoder
 from timm.utils import ModelEmaV3
 import wandb
+
 project = "DDPM_Simplex_EVAL21"
 wandb.init(project=project)
 
@@ -47,6 +48,7 @@ def main():
     print('------------------------ in main ------------------------')
     device = dist_util.dev()
     print("Device:", device)
+
 
     encoder_checkpoint = th.load(args.encoder_path, map_location=dist_util.dev())
     base_encoder = AEEncoder(in_channels=2)
@@ -104,7 +106,8 @@ def main():
     all_numbers = []
     all_images = []
     all_labels = []
-    dice_scores = []
+    dice_scores_nor = []
+    dice_scores_zimmer = []
     auprc_scores = []
 
     for n, img in enumerate(datal):
@@ -124,12 +127,16 @@ def main():
             Labelmask = F.pad(Labelmask, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
             print(f"Labelmask: {Labelmask.shape}")
             assert Labelmask.shape[-1] == 256
+
             number=img[4][0]
             if img[2]==0: #consider only unhealthy
                 continue
         else:
             assert args.dataset=='brats'
 
+        # sample_fn = (
+        #     diffusion.p_sample_loop_known if not args.use_ddim else diffusion.ddim_sample_loop_known
+        # )
         sample_fn = (
             diffusion.p_sample_loop_known
         )
@@ -199,12 +206,14 @@ def main():
     wandb.log({"mean_dice_score": np.mean(dice_scores), "mean_auroc_score": np.mean(auprc_scores)})
     print(f"{len(dice_scores)} samples tested, Mean dice score: {np.mean(dice_scores)}, Mean AUPRC: {np.mean(auprc_scores)}")
     print(dice_scores)
+
     print(auprc_scores)
 
     import pandas as pd
     results_df = pd.DataFrame({
         'number': all_numbers,
-        'dice_score': dice_scores,
+        'dice_score_normal': dice_scores_nor,
+        'dice_score_zimmer': dice_scores_zimmer,
         'auprc': auprc_scores
     })
     results_df.to_csv(f"./results_{args.noise_level}.csv", index=False)
@@ -214,7 +223,6 @@ def main():
     if args.class_cond:
         label_arr = np.concatenate(all_labels, axis=0)
         label_arr = label_arr[: args.num_samples]
-    
 
     dist.barrier()
     logger.log("sampling complete")
@@ -241,6 +249,14 @@ def create_argparser():
     parser = argparse.ArgumentParser()
     add_dict_to_argparser(parser, defaults)
     return parser
+
+def extract_sample_from_batch(batch_data, idx):
+    if isinstance(batch_data, th.Tensor):
+        return batch_data[idx:idx+1]
+    elif isinstance(batch_data, tuple) or isinstance(batch_data, list):
+        return [extract_sample_from_batch(item, idx) if isinstance(item, (th.Tensor, tuple, list)) else item for item in batch_data]
+    else:
+        return batch_data
 
 if __name__ == "__main__":
     main()
