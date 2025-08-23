@@ -1,8 +1,8 @@
 # Encoder Guided Diffusion Model for Unsupervised Anomaly Detection in Brain MRI Scans
 
-We provide the Pytorch implementation of our novel approach Encoder Guided Diffusion Model for Unsupervised Anomaly Detection in Brain MRI Scans".
+We provide the Pytorch implementation of our novel approach "Encoder Guided Diffusion Model for Unsupervised Anomaly Detection in Brain MRI Scans".
 
-The implementation of Denoising Diffusion Probabilistic Models presented in the paper is based on [openai/guided-diffusion](https://github.com/openai/guided-diffusion).
+The implementation of Denoising Diffusion Probabilistic Models presented in the paper is based on [openai/guided-diffusion](https://github.com/openai/guided-diffusion) and is further inspired by [JuliaWolleb/diffusion-anomaly](https://github.com/JuliaWolleb/diffusion-anomaly).
 
 ## Data
 
