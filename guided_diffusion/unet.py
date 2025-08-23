@@ -746,7 +746,9 @@ class UNetModel(nn.Module):
         print(f"  x.shape = {tuple(x.shape)} - This shape should be like [B,2,256,256]")
         if encoder_features is not None:
             print("------ Received encoder features in UNetModel forward------")
+            print(f"{encoder_features.keys()=}")
         
+        y=None
         assert (y is not None) == (
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"

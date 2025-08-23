@@ -40,8 +40,9 @@ class BRATSDataset(torch.utils.data.Dataset):
                         continue
                     seqtype = f.split('_')[3]
                     datapoint[seqtype] = os.path.join(root, f)
-                # assert set(datapoint.keys()) == self.seqtypes_set, \
-                #     f'datapoint is incomplete, keys are {datapoint.keys()}'
+                    
+                assert set(self.seqtypes) == self.seqtypes_set, \
+                    f'datapoint is incomplete, keys are {datapoint.keys()}'
                 self.database.append(datapoint)
 
     def __getitem__(self, x):
@@ -49,19 +50,19 @@ class BRATSDataset(torch.utils.data.Dataset):
         filedict = self.database[x]
         for seqtype in self.seqtypes:
             # print(filedict['t1'])
-            number=filedict['t1'].split('/')[-2]
+            number=filedict[self.seqtypes[0]].split('/')[-2]
             nib_img = nibabel.load(filedict[seqtype])
             out.append(torch.tensor(nib_img.get_fdata()))
         out = torch.stack(out)
         out_dict = {}
         if self.test_flag:
-            path2 = './brats-data/test_labels/' + str(
+            path2 = os.path.dirname(self.directory) + '/test_labels/' + str(
                 number) + '-label.nii'
 
 
             seg=nibabel.load(path2)
             seg=seg.get_fdata()
-            image = torch.zeros(2, 256, 256)
+            image = torch.zeros(len(self.seqtypes), 256, 256)
             image[:, 8:-8, 8:-8] = out
             label = seg[None, ...]
             if seg.max() > 0:
@@ -70,7 +71,7 @@ class BRATSDataset(torch.utils.data.Dataset):
                 weak_label = 0
             out_dict["y"]=weak_label
         else:
-            image = torch.zeros(2,256,256)
+            image = torch.zeros(len(self.seqtypes)-1, 256, 256)
             image[:,8:-8,8:-8]=out[:-1,...]		#pad to a size of (256,256)
             label = out[-1, ...][None, ...]
             if label.max()>0:

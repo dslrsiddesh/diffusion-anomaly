@@ -150,11 +150,16 @@ def find_best_val(x, y, val_range=(0, 1), max_steps=4, step=0, max_val=0, max_po
         return find_best_val(x, y, val_range=(center, top), step=step + 1, max_steps=max_steps,
                              max_val=max_val,max_point=max_point)
 def dice(P, G):
-    psum = np.sum(P.flatten())
-    gsum = np.sum(G.flatten())
-    pgsum = np.sum(np.multiply(P.flatten(), G.flatten()))
-    score = (2 * pgsum) / (psum + gsum)
-    return score
+    # psum = np.sum(P.flatten())
+    # gsum = np.sum(G.flatten())
+    # pgsum = np.sum(np.multiply(P.flatten(), G.flatten()))
+    # score = (2 * pgsum) / (psum + gsum)
+    # return score
+    P = (P > 0).astype(float)
+    G = (G > 0).astype(float)
+    intersection = (P * G).sum()
+    return 2. * intersection / (P.sum() + G.sum())
+
 
 def filter_3d_connected_components(volume):
     sz = None

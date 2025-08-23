@@ -297,7 +297,7 @@ def plot_reconstruction(images, recons, epoch, recon_path, model_name):
     plt.tight_layout()
     
     plt.savefig(f"{recon_path}/recons_e{epoch}_{model_name}.png", bbox_inches='tight')  # Save as PNG
-    wandb.log({f"recons_e{epoch}_{model_name}": wandb.Image(plt)})
+    wandb.log({f"recons_e{epoch}": wandb.Image(plt)})
     plt.close()
 
 

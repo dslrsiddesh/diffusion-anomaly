@@ -31,10 +31,9 @@ from scripts.evaluation import postprocess_evaluate
 from guided_diffusion.encoder import AEEncoder
 from timm.utils import ModelEmaV3
 import wandb
-wandb.login(key="b3990523b6efe11b984fad8a8e64911f78399735")
 
-project = "DDPM_Simplex_eval_re"
-wandb.init(project=project, reinit=True)
+project = "DDPM_Simplex_EVAL21"
+wandb.init(project=project)
 
 def visualize(img):
     _min = img.min()
@@ -43,11 +42,15 @@ def visualize(img):
     return normalized_img
 
 def main():
+    args = create_argparser().parse_args()
+
+
     print('------------------------ in main ------------------------')
     device = dist_util.dev()
     print("Device:", device)
 
-    encoder_checkpoint = th.load("/kaggle/input/ae-2channel/ckpt_2channel_epoch25.pth", map_location="cpu")
+
+    encoder_checkpoint = th.load(args.encoder_path, map_location=dist_util.dev())
     base_encoder = AEEncoder(in_channels=2)
 
     ema_encoder_model = ModelEmaV3(base_encoder, decay=0.999)
@@ -58,7 +61,7 @@ def main():
     ema_encoder.eval()
     print("---------------------------ema_encoder loaded and set to eval mode---------------------------")
 
-    args = create_argparser().parse_args()
+    
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -125,12 +128,8 @@ def main():
             print(f"Labelmask: {Labelmask.shape}")
             assert Labelmask.shape[-1] == 256
 
-            if isinstance(img[4], list):
-                numbers = img[4]
-            else:
-                numbers = [img[4][i] for i in range(img[0].shape[0])]
-                
-            if img[2].sum() == 0:
+            number=img[4][0]
+            if img[2]==0: #consider only unhealthy
                 continue
         else:
             assert args.dataset=='brats'
@@ -157,65 +156,57 @@ def main():
         else:
             encoder_features = None
             print("===== No encoder features extraction because of the model=None =====")
-        try: 
-            sample, x_noisy, org = sample_fn(
-                                            model_fn,
-                                            (args.batch_size, 2, args.image_size, args.image_size),
-                                            img, 
-                                            org=img,
-                                            clip_denoised=args.clip_denoised,
-                                            model_kwargs=model_kwargs,
-                                            cond_fn=None,
-                                            device=dist_util.dev(),
-                                            noise_level=args.noise_level,
-                                            encoder_features=encoder_features,
-                                        )
-            end.record()
-            th.cuda.synchronize()
-            th.cuda.current_stream().synchronize()
-            print('time taken:', start.elapsed_time(end))
-        except RuntimeError:
-            continue
 
-        # if args.dataset=='brats':
-        #     pp_dice, pp_auprc, pp_figure = postprocess_evaluate(org, sample, Labelmask)
+        sample, x_noisy, org = sample_fn(
+                                        model_fn,
+                                        (args.batch_size, 2, args.image_size, args.image_size), # shape
+                                        img, 
+                                        org=img,
+                                        clip_denoised=args.clip_denoised,
+                                        model_kwargs=model_kwargs,
+                                        cond_fn=None,
+                                        device=dist_util.dev(),
+                                        noise_level=args.noise_level,
+                                        encoder_features=encoder_features,
+                                    )
+        end.record()
+        th.cuda.synchronize()
+        th.cuda.current_stream().synchronize()
 
-        #     wandb.log({
-        #             f"anomaly_map_th_{str(img[4])}": wandb.Image(pp_figure, caption=f"Dice Score{pp_dice:.3f}, {pp_auprc:.3f}"), 
-        #         })
-        #     plt.clf()
-        #     all_numbers.append(number)
-        #     dice_scores.append(pp_dice)
-        #     auprc_scores.append(pp_auprc)
-        #     print(f"Sample: {str(img[4])}, {pp_dice=}, {pp_auprc=}")
 
-        # print("<<<<<<<<<<<<<<<<<<<<<<Sampling completed>>>>>>>>>>>>>>>>>>>>>>>")
+        print('time taken:', start.elapsed_time(end))
+
+        print(f"{sample.shape=}")
+        print(f"{org.shape=}")
+
         if args.dataset=='brats':
-            for batch_idx in range(args.batch_size):
-                if hasattr(img[2], 'shape') and img[2].shape[0] > 1 and img[2][batch_idx] == 0:
-                    continue
-                    
-                single_org = extract_sample_from_batch(org, batch_idx)
-                single_sample = sample[batch_idx:batch_idx+1]  
-                single_labelmask = Labelmask[batch_idx:batch_idx+1]
-                current_number = numbers[batch_idx]
-                
-                pp_dice_nor, pp_dice_zimmer, pp_auprc, pp_figure = postprocess_evaluate(single_org, single_sample, single_labelmask)
+            pp_dice, pp_auprc, pp_figure = postprocess_evaluate(org, sample, Labelmask)
 
-                wandb.log({
-                        f"anomaly_map_th_{str(current_number)}": wandb.Image(pp_figure, caption=f"Dice Score{pp_dice_nor:.3f}, {pp_dice_zimmer:.3f}, {pp_auprc:.3f}"), 
-                    })
-                plt.clf()
-                all_numbers.append(current_number)
-                dice_scores_nor.append(pp_dice_nor)
-                dice_scores_zimmer.append(pp_dice_zimmer)
-                auprc_scores.append(pp_auprc)
-                print(f"Sample: {str(current_number)}, {pp_dice_nor=}, {pp_dice_zimmer=}, {pp_auprc=}")
+            wandb.log({
+                    f"anomaly_map_th_{str(img[4])}": wandb.Image(pp_figure, caption=f"Dice Score:{pp_dice:.3f}, AUCROC:{pp_auprc:.3f}"), 
+                })
+            plt.clf()
+            all_numbers.append(number)
+            dice_scores.append(pp_dice)
+            auprc_scores.append(pp_auprc)
+            print(f"Sample: {str(img[4])}, {pp_dice=}, {pp_auprc=}")
 
-    wandb.log({"mean_dice_score_normal": np.mean(dice_scores_nor), "mean_dice_score_zimmer": np.mean(dice_scores_zimmer), "mean_auprc_score": np.mean(auprc_scores)})
-    print(f"{len(dice_scores_nor)} samples tested, Mean dice score: {np.mean(dice_scores_nor)}, {np.mean(dice_scores_zimmer)}, Mean AUPRC: {np.mean(auprc_scores)}")
-    print(dice_scores_nor)
-    print(dice_scores_zimmer)
+        # gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
+        # dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
+        # all_images.extend([sample.cpu().numpy() for sample in gathered_samples])
+        
+
+        # Simply append samples without gathering
+        # all_images.append(sample.cpu().numpy())
+        # if args.class_cond:
+        #     all_labels.append(classes.cpu().numpy())
+        
+        print("<<<<<<<<<<<<<<<<<<<<<<Sampling completed>>>>>>>>>>>>>>>>>>>>>>>")
+
+    wandb.log({"mean_dice_score": np.mean(dice_scores), "mean_auroc_score": np.mean(auprc_scores)})
+    print(f"{len(dice_scores)} samples tested, Mean dice score: {np.mean(dice_scores)}, Mean AUPRC: {np.mean(auprc_scores)}")
+    print(dice_scores)
+
     print(auprc_scores)
 
     import pandas as pd
@@ -225,7 +216,7 @@ def main():
         'dice_score_zimmer': dice_scores_zimmer,
         'auprc': auprc_scores
     })
-    results_df.to_csv(f"./results_{date_time_str}.csv", index=False)
+    results_df.to_csv(f"./results_{args.noise_level}.csv", index=False)
 
     arr = np.concatenate(all_images, axis=0)
     arr = arr[: args.num_samples]
@@ -241,17 +232,17 @@ def main():
 def create_argparser():
     defaults = dict(
         output_dir="sampled",
-        data_dir="",
-        clip_denoised="zero",
+        data_dir="testing",
+        clip_denoised=True,
         num_samples=10,
         batch_size=1,
         use_ddim=False,
-        model_path="",
+        model_path="/results/brats2update050000.pt",
         classifier_path="",
         classifier_scale=100,
         noise_level=500,
         dataset='brats',
-        classifier_free_guidance_scale=2.0,
+        encoder_path="ckpts/ae_ckpt_2channel_epoch25.pth"
     )
     defaults.update(model_and_diffusion_defaults())
     # defaults.update(classifier_defaults())
